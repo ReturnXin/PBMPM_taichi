@@ -38,48 +38,50 @@ class MpmPBDSolver:
     def __init__(self):
 
         self.dim = 3
-        self.n_grid = 48
         self.dt = 8e-3
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
         self.n_loop[None] = 0
-        self.dx = 1 / self.n_grid
 
         self.p_rho = 1
-        self.p_vol = 1 / 2**3  # 粒子体积
-        self.p_mass = self.p_vol * self.p_rho  # 粒子质量
-        self.gravity = 9.8  # 重力
+        self.p_vol = 1 / 2**3
+        self.p_mass = self.p_vol * self.p_rho
+        self.gravity = 9.8
         self.bound = 3
         self.iteration = 10
 
-        # ===粒子
+        # ===Particle
         self.max_particles = 200000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
-        self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # 位置
-        self.dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # 位移
-        self.D = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)  # 位置偏差
-        self.L = ti.field(dtype=ti.f32, shape=self.max_particles)  # 液体密度
-        self.F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)  # 形变梯度
+        self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
+        self.dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Displacement
+        self.D = ti.Matrix.field(
+            self.dim, self.dim, dtype=ti.f32, shape=self.max_particles
+        )  # Deformation Displacement
+        self.L = ti.field(dtype=ti.f32, shape=self.max_particles)  # Density
+        self.F = ti.Matrix.field(
+            self.dim, self.dim, dtype=ti.f32, shape=self.max_particles
+        )  # Deformation Gradient
         self.log_JP = ti.field(dtype=ti.f32, shape=self.max_particles)
         self.color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
         self.radius = ti.field(dtype=ti.f32, shape=self.max_particles)
 
-        # ===材质
+        # ===Material
         self.num_materials = 3
         self.mat_params = MaterialParam.field(shape=(self.num_materials,))
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
-        # ===网格
-        self.grid_v = ti.Vector.field(
-            self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim
-        )  # 网格节点的动量
+        # ===Grid
+        self.n_grid = 48
+        self.dx = 1 / self.n_grid
+        self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_m = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_vol = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
 
-        # ===障碍物
+        # ===Obstacles
         self.max_num_obstacles = 10
         self.num_obstacles = ti.field(dtype=ti.i32, shape=())
         self.num_obstacles[None] = 0
@@ -93,7 +95,7 @@ class MpmPBDSolver:
         self.mesh_indices = None
         self.mesh_colors = None
 
-        # ===调试
+        # ===Debug
         self.num_grid_lines = 3 * (2 * (self.n_grid + 1) + 1)
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
@@ -508,23 +510,23 @@ class MpmPBDSolver:
     @ti.func
     def update_particles(self, p):
         if self.material[p] == 0:  # fluid
-            # 更新密度
+            # Update Density
             self.L[p] *= self.D[p].trace() + 1
             self.L[p] = ti.max(self.L[p], 0.05)
 
-            # 根据速度计算水体颜色
+            # Compute Color of The Water According to Speed
             speed = self.dis[p].norm() / self.dt
             color_deep = ti.Vector([0.1, 0.4, 0.8])
             color_shallow = ti.Vector([0.4, 0.7, 1.0])
             color_foam = ti.Vector([1.0, 1.0, 1.0])
-            speed_bar = 0.5
+            speed_bar = 1.5
             if speed < speed_bar:
                 t = speed / speed_bar
                 self.color[p] = color_deep * (1.0 - t) + color_shallow * t
             else:
                 t = ti.min((speed - 2.0) / 3.0, 1.0)
                 self.color[p] = color_shallow * (1.0 - t) + color_foam * t
-        elif self.material[p] == 1:
+        elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
             U, sig, V = ti.svd(self.F[p])
             new_sig = ti.Matrix.identity(ti.f32, self.dim)
@@ -536,7 +538,7 @@ class MpmPBDSolver:
             self.F[p] = (I + self.D[p]) @ self.F[p]
             U, sig, V = ti.svd(self.F[p])
 
-            # === Drucker-Prager 核心算法 ===
+            # === Drucker-Prager ===
             sin_phi = ti.sin(self.mat_params[2].friction_angle * 3.1415926 / 180.0)
             alpha = ti.sqrt(2.0 / 3.0) * 2.0 * sin_phi / (3.0 - sin_phi)
             beta = 0.5
