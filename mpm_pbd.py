@@ -38,48 +38,56 @@ class MpmPBDSolver:
     def __init__(self):
 
         self.dim = 3
-        self.n_grid = 48
-        self.dt = 8e-3
+        self.dt = 1e-2
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
         self.n_loop[None] = 0
-        self.dx = 1 / self.n_grid
 
         self.p_rho = 1
-        self.p_vol = 1 / 2**3  # 粒子体积
-        self.p_mass = self.p_vol * self.p_rho  # 粒子质量
-        self.gravity = 9.8  # 重力
-        self.bound = 3
-        self.iteration = 10
+        self.p_vol = 1 / 2**3
+        self.p_mass = self.p_vol * self.p_rho
+        self.gravity = 9.8
+        self.bound = 6
+        self.iteration = 5
 
-        # ===粒子
+        # ===Particle
         self.max_particles = 200000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
-        self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # 位置
-        self.dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # 位移
-        self.D = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)  # 位置偏差
-        self.L = ti.field(dtype=ti.f32, shape=self.max_particles)  # 液体密度
-        self.F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)  # 形变梯度
+        self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
+        self.dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Displacement
+        self.D = ti.Matrix.field(
+            self.dim, self.dim, dtype=ti.f32, shape=self.max_particles
+        )  # Deformation Displacement
+        self.L = ti.field(dtype=ti.f32, shape=self.max_particles)  # Density
+        self.F = ti.Matrix.field(
+            self.dim, self.dim, dtype=ti.f32, shape=self.max_particles
+        )  # Deformation Gradient
         self.log_JP = ti.field(dtype=ti.f32, shape=self.max_particles)
         self.color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
         self.radius = ti.field(dtype=ti.f32, shape=self.max_particles)
 
-        # ===材质
+        # ===Material
         self.num_materials = 3
         self.mat_params = MaterialParam.field(shape=(self.num_materials,))
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
-        # ===网格
-        self.grid_v = ti.Vector.field(
-            self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim
-        )  # 网格节点的动量
-        self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
-        self.grid_m = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
-        self.grid_vol = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
+        # ===Grid
+        self.n_grid = 64
+        self.dx = 1 / self.n_grid
+        self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32)
+        self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32)
+        self.grid_m = ti.field(dtype=ti.f32)
+        self.grid_vol = ti.field(dtype=ti.f32)
+        # Sparse Grid
+        block_size = 8
+        n_memory_size = self.n_grid * 2
+        self.grid_snode = ti.root.pointer(ti.ijk, n_memory_size // block_size)
+        self.pixel = self.grid_snode.dense(ti.ijk, block_size)
+        self.pixel.place(self.grid_v, self.grid_dis, self.grid_m, self.grid_vol)
 
-        # ===障碍物
+        # ===Obstacles
         self.max_num_obstacles = 10
         self.num_obstacles = ti.field(dtype=ti.i32, shape=())
         self.num_obstacles[None] = 0
@@ -93,7 +101,7 @@ class MpmPBDSolver:
         self.mesh_indices = None
         self.mesh_colors = None
 
-        # ===调试
+        # ===Debug
         self.num_grid_lines = 3 * (2 * (self.n_grid + 1) + 1)
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
@@ -368,247 +376,236 @@ class MpmPBDSolver:
             self.dis[p] += gravity_impulse
 
     # region === MPM ===
-    @ti.func
-    def solve_constraint(self, p):
-        if self.material[p] == 0:  # fluid
-            # (A) 黏度约束
-            deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
-            self.D[p] += self.mat_params[0].viscosity * 0.5 * deviatoric
+    @ti.kernel
+    def solve_constraint(self):
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:  # fluid
+                # (A) 黏度约束
+                deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
+                self.D[p] += self.mat_params[0].viscosity * 0.5 * deviatoric
 
-            # (B) 体积/压力约束
-            current_trace = self.D[p].trace()
-            safe_L = ti.max(self.L[p], 0.1)
-            alpha = (1.0 / 3.0) * (1.0 / safe_L - current_trace - 1.0)
-            self.D[p] += self.mat_params[0].stiffness * alpha * ti.Matrix.identity(ti.f32, self.dim)
+                # (B) 体积/压力约束
+                current_trace = self.D[p].trace()
+                safe_L = ti.max(self.L[p], 0.1)
+                alpha = (1.0 / 3.0) * (1.0 / safe_L - current_trace - 1.0)
+                self.D[p] += self.mat_params[0].stiffness * alpha * ti.Matrix.identity(ti.f32, self.dim)
 
-        elif self.material[p] == 1:  # elastic
-            I = ti.Matrix.identity(ti.f32, self.dim)
-            F_star = (I + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(F_star)
-            new_sig = ti.Matrix.identity(ti.f32, self.dim)
-            for d in range(self.dim):
-                new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
-            F_star = U @ new_sig @ V.transpose()
-            A_shape = U @ V.transpose()
+            elif self.material[p] == 1:  # elastic
+                I = ti.Matrix.identity(ti.f32, self.dim)
+                F_star = (I + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(F_star)
+                new_sig = ti.Matrix.identity(ti.f32, self.dim)
+                for d in range(self.dim):
+                    new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
+                F_star = U @ new_sig @ V.transpose()
+                A_shape = U @ V.transpose()
 
-            det_F = F_star.determinant()
-            det_F_clamped = ti.max(0.1, ti.min(det_F, 1000))
-            A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
+                det_F = F_star.determinant()
+                det_F_clamped = ti.max(0.1, ti.min(det_F, 1000))
+                A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
 
-            beta = self.mat_params[1].beta
-            elastic_relaxation = self.mat_params[1].elastic_relaxation
-            tgt = beta * A_shape + (1 - beta) * A_vol
-            diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
-            self.D[p] += elastic_relaxation * diff
+                beta = self.mat_params[1].beta
+                elastic_relaxation = self.mat_params[1].elastic_relaxation
+                tgt = beta * A_shape + (1 - beta) * A_vol
+                diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
+                self.D[p] += elastic_relaxation * diff
 
-        elif self.material[p] == 2:  # sand
-            I = ti.Matrix.identity(ti.f32, self.dim)
-            F_star = (I + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(F_star)
-            for d in range(self.dim):
-                sig[d, d] = ti.max(1.0, ti.min(sig[d, d], 1000))
-            A_shape = U @ sig @ V.transpose()
+            elif self.material[p] == 2:  # sand
+                I = ti.Matrix.identity(ti.f32, self.dim)
+                F_star = (I + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(F_star)
+                for d in range(self.dim):
+                    sig[d, d] = ti.max(1.0, ti.min(sig[d, d], 1000))
+                A_shape = U @ sig @ V.transpose()
 
-            det_F = F_star.determinant()
-            det_F_clamped = ti.max(0.1, ti.min(det_F, 1.0))
-            A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
+                det_F = F_star.determinant()
+                det_F_clamped = ti.max(0.1, ti.min(det_F, 1.0))
+                A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
 
-            beta = self.mat_params[2].beta
-            tgt = beta * A_shape + (1 - beta) * A_vol
-            diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
-            elastic_relaxtion = self.mat_params[1].elastic_relaxation
-            self.D[p] += elastic_relaxtion * diff
+                beta = self.mat_params[2].beta
+                tgt = beta * A_shape + (1 - beta) * A_vol
+                diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
+                elastic_relaxtion = self.mat_params[1].elastic_relaxation
+                self.D[p] += elastic_relaxtion * diff
 
-            alpha_visc = 0.1
-            deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
-            self.D[p] += alpha_visc * 0.5 * deviatoric
-
-    @ti.func
-    def P2G(self, p):
-        Xp = self.x[p] / self.dx
-        base = int(Xp - 0.5)  # 向下取整
-        fx = Xp - base
-        w = [
-            0.5 * (1.5 - fx) ** 2,  # 对应网格节点i1
-            0.75 - (fx - 1) ** 2,  # 对应网格节点i+1
-            0.5 * (fx - 0.5) ** 2,  # 对应网格节点i+2
-        ]
-
-        for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
-            weight = 1.0
-            dpos = (offset - fx) * self.dx
-            for i in ti.static(range(self.dim)):
-                weight *= w[offset[i]][i]
-            momentum = weight * (self.dis[p] + self.D[p] @ dpos)
-            self.grid_dis[base + offset] += momentum
-            self.grid_m[base + offset] += weight
-            if self.material[p] == 0:
-                self.grid_vol[base + offset] += weight * self.p_vol
-
-    @ti.func
-    def update_grid(self, I):
-        # 时间步进，网格更新
-        if self.grid_m[I] > 1e-6:
-            self.grid_dis[I] /= self.grid_m[I]
-            grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
-            grid_disp = self.grid_dis[I]
-            for i in range(self.num_obstacles[None]):
-                predict_pos = grid_disp + grid_pos
-                is_collide, _, normal_in, point_on_surface = self.collide(predict_pos, self.obstacles[i])
-                if is_collide:
-                    v_proj = grid_disp.dot(normal_in)
-                    if v_proj > 0:
-                        grid_disp -= v_proj * normal_in
-            self.grid_dis[I] = grid_disp
-
-            # TODO: 为了沙子堆积添加了摩擦力，感觉需要把摩擦力移动到其他地方
-            boundary_friction = 0.0
-            damping = 1.0 - boundary_friction
-            for d in ti.static(range(self.dim)):
-                if I[d] < self.bound and self.grid_dis[I][d] < 0:
-                    self.grid_dis[I][d] = 0
-                    self.grid_dis[I] *= damping
-                if I[d] > self.n_grid - self.bound and self.grid_dis[I][d] > 0:
-                    self.grid_dis[I][d] = 0
-                    self.grid_dis[I] *= damping
-        else:
-            self.grid_dis[I] = ti.Vector.zero(ti.f32, self.dim)
-
-    @ti.func
-    def G2P(self, p):
-        Xp = self.x[p] / self.dx
-        base = int(Xp - 0.5)
-        fx = Xp - base
-        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-
-        new_dis = ti.zero(self.dis[p])
-        new_D = ti.zero(self.D[p])
-
-        gathered_vol = 0.0
-
-        for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
-            dpos = (offset - fx) * self.dx
-            weight = 1.0
-            for i in ti.static(range(self.dim)):
-                weight *= w[offset[i]][i]
-            g_dis = self.grid_dis[base + offset]
-            new_dis += weight * g_dis
-            new_D += weight * (4 * g_dis.outer_product(dpos) / self.dx**2)
-            if self.material[p] == 0:
-                gathered_vol += weight * self.grid_vol[base + offset]
-        if self.material[p] == 0:
-            J = 1.0 / gathered_vol
-            if J < 1.0:
-                self.L[p] = 0.9 * self.L[p] + 0.1 * J
-
-        self.dis[p] = new_dis
-        self.D[p] = new_D
-        # self.solve_constraints(p)
-
-    @ti.func
-    def update_particles(self, p):
-        if self.material[p] == 0:  # fluid
-            # 更新密度
-            self.L[p] *= self.D[p].trace() + 1
-            self.L[p] = ti.max(self.L[p], 0.05)
-
-            # 根据速度计算水体颜色
-            speed = self.dis[p].norm() / self.dt
-            color_deep = ti.Vector([0.1, 0.4, 0.8])
-            color_shallow = ti.Vector([0.4, 0.7, 1.0])
-            color_foam = ti.Vector([1.0, 1.0, 1.0])
-            speed_bar = 0.5
-            if speed < speed_bar:
-                t = speed / speed_bar
-                self.color[p] = color_deep * (1.0 - t) + color_shallow * t
-            else:
-                t = ti.min((speed - 2.0) / 3.0, 1.0)
-                self.color[p] = color_shallow * (1.0 - t) + color_foam * t
-        elif self.material[p] == 1:
-            self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(self.F[p])
-            new_sig = ti.Matrix.identity(ti.f32, self.dim)
-            for d in range(self.dim):
-                new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
-            self.F[p] = U @ new_sig @ V.transpose()
-        elif self.material[p] == 2:
-            I = ti.Matrix.identity(ti.f32, self.dim)
-            self.F[p] = (I + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(self.F[p])
-
-            # === Drucker-Prager 核心算法 ===
-            sin_phi = ti.sin(self.mat_params[2].friction_angle * 3.1415926 / 180.0)
-            alpha = ti.sqrt(2.0 / 3.0) * 2.0 * sin_phi / (3.0 - sin_phi)
-            beta = 0.5
-
-            epsilon = ti.Vector([0.0, 0.0, 0.0])
-            for d in range(self.dim):
-                epsilon[d] = ti.log(ti.max(ti.abs(sig[d, d]), 1e-6))
-            trace_epsilon = epsilon.sum() + self.log_JP[p]
-            epsilon_hat = epsilon - trace_epsilon / 3.0
-            frob_norm = epsilon_hat.norm()
-            epsilon_new = ti.Vector([0.0, 0.0, 0.0])
-            if trace_epsilon >= 0:
-                epsilon_new = ti.Vector([0.0, 0.0, 0.0])
-                self.log_JP[p] = beta * trace_epsilon
-            else:
-                self.log_JP[p] = 0.0
-                delta_gamma = frob_norm + (self.mat_params[2].beta + 1.0) * trace_epsilon * alpha
-                if delta_gamma > 0:
-                    ratio = delta_gamma / frob_norm
-                    epsilon_new = epsilon - ratio * epsilon_hat
-                else:
-                    epsilon_new = epsilon
-
-            sig_final = ti.Matrix.zero(ti.f32, self.dim, self.dim)
-            for d in range(self.dim):
-                sig_final[d, d] = ti.exp(epsilon_new[d])
-            self.F[p] = U @ sig_final @ V.transpose()
-
-        self.x[p] += self.dis[p]
-
-        gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
-        self.dis[p] += gravity_impulse
-
-        # SDF碰撞检测
-        for i in range(self.num_obstacles[None]):
-            is_collide, peneration, normal, point_on_surface = self.collide(self.x[p], self.obstacles[i])
-            if is_collide:
-                self.dis[p] -= peneration * normal
-
-        # 边界限制
-        padding = (self.bound - 1) * self.dx - 1e-5
-        for d in ti.static(range(self.dim)):
-            if self.x[p][d] < padding:
-                self.x[p][d] = padding
-            if self.x[p][d] > 1:
-                self.x[p][d] = 1
+                alpha_visc = 0.1
+                deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
+                self.D[p] += alpha_visc * 0.5 * deviatoric
 
     @ti.kernel
-    def solve_iteration(self):
-        self.n_loop[None] += 1
-        for I in ti.grouped(self.grid_m):
-            self.update_grid(I)
-
+    def P2G(self):
         for p in range(self.n_particles[None]):
-            self.G2P(p)
-            if self.n_loop[None] == self.iteration - 1:
-                self.update_particles(p)
-            self.solve_constraint(p)
+            Xp = self.x[p] / self.dx
+            base = int(Xp - 0.5)  # 向下取整
+            fx = Xp - base
+            w = [
+                0.5 * (1.5 - fx) ** 2,  # 对应网格节点i1
+                0.75 - (fx - 1) ** 2,  # 对应网格节点i+1
+                0.5 * (fx - 0.5) ** 2,  # 对应网格节点i+2
+            ]
 
+            for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
+                weight = 1.0
+                dpos = (offset - fx) * self.dx
+                for i in ti.static(range(self.dim)):
+                    weight *= w[offset[i]][i]
+                momentum = weight * (self.dis[p] + self.D[p] @ dpos)
+                self.grid_dis[base + offset] += momentum
+                self.grid_m[base + offset] += weight
+                if self.material[p] == 0:
+                    self.grid_vol[base + offset] += weight * self.p_vol
+
+    @ti.kernel
+    def update_grid(self):
+        # 时间步进，网格更新
         for I in ti.grouped(self.grid_m):
-            self.grid_dis[I] = ti.zero(self.grid_dis[I])
-            self.grid_m[I] = 0.0
-            self.grid_vol[I] = 0.0
+            if self.grid_m[I] > 1e-6:
+                self.grid_dis[I] /= self.grid_m[I]
+                grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
+                grid_disp = self.grid_dis[I]
+                for i in range(self.num_obstacles[None]):
+                    predict_pos = grid_disp + grid_pos
+                    is_collide, _, normal_in, point_on_surface = self.collide(predict_pos, self.obstacles[i])
+                    if is_collide:
+                        v_proj = grid_disp.dot(normal_in)
+                        if v_proj > 0:
+                            grid_disp -= v_proj * normal_in
+                self.grid_dis[I] = grid_disp
 
+                # TODO: 为了沙子堆积添加了摩擦力，感觉需要把摩擦力移动到其他地方
+                boundary_friction = 0.0
+                damping = 1.0 - boundary_friction
+                for d in ti.static(range(self.dim)):
+                    if I[d] < self.bound and self.grid_dis[I][d] < 0:
+                        self.grid_dis[I][d] = 0
+                        self.grid_dis[I] *= damping
+                    if I[d] > self.n_grid - self.bound and self.grid_dis[I][d] > 0:
+                        self.grid_dis[I][d] = 0
+                        self.grid_dis[I] *= damping
+            else:
+                self.grid_dis[I] = ti.Vector.zero(ti.f32, self.dim)
+
+    @ti.kernel
+    def G2P(self):
         for p in range(self.n_particles[None]):
-            self.P2G(p)
+            Xp = self.x[p] / self.dx
+            base = int(Xp - 0.5)
+            fx = Xp - base
+            w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
+
+            new_dis = ti.zero(self.dis[p])
+            new_D = ti.zero(self.D[p])
+
+            gathered_vol = 0.0
+
+            for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
+                dpos = (offset - fx) * self.dx
+                weight = 1.0
+                for i in ti.static(range(self.dim)):
+                    weight *= w[offset[i]][i]
+                g_dis = self.grid_dis[base + offset]
+                new_dis += weight * g_dis
+                new_D += weight * (4 * g_dis.outer_product(dpos) / self.dx**2)
+                if self.material[p] == 0:
+                    gathered_vol += weight * self.grid_vol[base + offset]
+            if self.material[p] == 0:
+                J = 1.0 / gathered_vol
+                if J < 1.0:
+                    self.L[p] = 0.9 * self.L[p] + 0.1 * J
+
+            self.dis[p] = new_dis
+            self.D[p] = new_D
+
+    @ti.kernel
+    def update_particles(self):
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:  # fluid
+                # Update Density
+                self.L[p] *= self.D[p].trace() + 1
+                self.L[p] = ti.max(self.L[p], 0.05)
+
+                # Compute Color of The Water According to Speed
+                speed = self.dis[p].norm() / self.dt
+                color_deep = ti.Vector([0.1, 0.4, 0.8])
+                color_shallow = ti.Vector([0.4, 0.7, 1.0])
+                color_foam = ti.Vector([1.0, 1.0, 1.0])
+                speed_bar = 1.5
+                if speed < speed_bar:
+                    t = speed / speed_bar
+                    self.color[p] = color_deep * (1.0 - t) + color_shallow * t
+                else:
+                    t = ti.min((speed - 2.0) / 3.0, 1.0)
+                    self.color[p] = color_shallow * (1.0 - t) + color_foam * t
+            elif self.material[p] == 1:  # elastic
+                self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(self.F[p])
+                new_sig = ti.Matrix.identity(ti.f32, self.dim)
+                for d in range(self.dim):
+                    new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
+                self.F[p] = U @ new_sig @ V.transpose()
+            elif self.material[p] == 2:
+                I = ti.Matrix.identity(ti.f32, self.dim)
+                self.F[p] = (I + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(self.F[p])
+
+                # === Drucker-Prager ===
+                sin_phi = ti.sin(self.mat_params[2].friction_angle * 3.1415926 / 180.0)
+                alpha = ti.sqrt(2.0 / 3.0) * 2.0 * sin_phi / (3.0 - sin_phi)
+                beta = 0.5
+
+                epsilon = ti.Vector([0.0, 0.0, 0.0])
+                for d in range(self.dim):
+                    epsilon[d] = ti.log(ti.max(ti.abs(sig[d, d]), 1e-6))
+                trace_epsilon = epsilon.sum() + self.log_JP[p]
+                epsilon_hat = epsilon - trace_epsilon / 3.0
+                frob_norm = epsilon_hat.norm()
+                epsilon_new = ti.Vector([0.0, 0.0, 0.0])
+                if trace_epsilon >= 0:
+                    epsilon_new = ti.Vector([0.0, 0.0, 0.0])
+                    self.log_JP[p] = beta * trace_epsilon
+                else:
+                    self.log_JP[p] = 0.0
+                    delta_gamma = frob_norm + (self.mat_params[2].beta + 1.0) * trace_epsilon * alpha
+                    if delta_gamma > 0:
+                        ratio = delta_gamma / frob_norm
+                        epsilon_new = epsilon - ratio * epsilon_hat
+                    else:
+                        epsilon_new = epsilon
+
+                sig_final = ti.Matrix.zero(ti.f32, self.dim, self.dim)
+                for d in range(self.dim):
+                    sig_final[d, d] = ti.exp(epsilon_new[d])
+                self.F[p] = U @ sig_final @ V.transpose()
+
+            self.x[p] += self.dis[p]
+
+            gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
+            self.dis[p] += gravity_impulse
+
+            # SDF碰撞检测
+            for i in range(self.num_obstacles[None]):
+                is_collide, peneration, normal, point_on_surface = self.collide(self.x[p], self.obstacles[i])
+                if is_collide:
+                    self.dis[p] -= peneration * normal
+
+            # 边界限制
+            padding = (self.bound - 1) * self.dx - 1e-5
+            for d in ti.static(range(self.dim)):
+                if self.x[p][d] < padding:
+                    self.x[p][d] = padding
+                if self.x[p][d] > 1:
+                    self.x[p][d] = 1
 
     def substep(self):
-        # self.add_external_force()
+        self.add_external_force()
         for _ in range(self.iteration):
-            self.solve_iteration()
+            self.grid_snode.deactivate_all()
+            self.solve_constraint()
+            self.P2G()
+            self.update_grid()
+            self.G2P()
 
+        self.update_particles()
         self.n_loop[None] = 0
 
     # endregion

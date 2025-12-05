@@ -29,7 +29,7 @@ def main():
     shake_strength = 0.01
     is_add_fluid = False
     move_speed = 0.01
-    hide_obstacles = True
+    hide_obstacles = False
     # endregion
 
     # region === scene setting ===
