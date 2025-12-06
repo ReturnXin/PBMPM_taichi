@@ -29,13 +29,13 @@ def main():
     shake_strength = 0.01
     is_add_fluid = False
     move_speed = 0.01
-    hide_obstacles = False
+    hide_obstacles = True
     # endregion
 
     # region === scene setting ===
     scene.ambient_light((0.5, 0.5, 0.5))
     # mpm.add_box_obstacles(center=[0.5, 0.125, 0.5], size=[0.25, 0.25, 0.25], color=[0.6, 0.4, 0.8])
-    # mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
+    mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
     mpm.add_cube(
         particle_num=2**15,
         center=[0.4, 0.5, 0.4],

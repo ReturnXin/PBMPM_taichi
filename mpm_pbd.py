@@ -526,16 +526,18 @@ class MpmPBDSolver:
 
                 # Compute Color of The Water According to Speed
                 speed = self.dis[p].norm() / self.dt
-                color_deep = ti.Vector([0.1, 0.4, 0.8])
-                color_shallow = ti.Vector([0.4, 0.7, 1.0])
+                color_deep = ti.Vector([0.05, 0.1, 0.35])
+                color_surface = ti.Vector([0.3, 0.7, 0.9])
                 color_foam = ti.Vector([1.0, 1.0, 1.0])
-                speed_bar = 1.5
-                if speed < speed_bar:
-                    t = speed / speed_bar
-                    self.color[p] = color_deep * (1.0 - t) + color_shallow * t
-                else:
-                    t = ti.min((speed - 2.0) / 3.0, 1.0)
-                    self.color[p] = color_shallow * (1.0 - t) + color_foam * t
+                pos_y = self.x[p].y
+                bottom_y = self.bound * self.dx
+                surface_y = 0.2
+                t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
+                t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
+                base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
+                foan_threshold = 1.0
+                t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
+                self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
             elif self.material[p] == 1:  # elastic
                 self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
                 U, sig, V = ti.svd(self.F[p])
