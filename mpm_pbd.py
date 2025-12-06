@@ -38,7 +38,7 @@ class MpmPBDSolver:
     def __init__(self):
 
         self.dim = 3
-        self.dt = 1e-2
+        self.dt = 8e-3
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
@@ -74,7 +74,7 @@ class MpmPBDSolver:
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
         # ===Grid
-        self.n_grid = 64
+        self.n_grid = 48
         self.dx = 1 / self.n_grid
         self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32)
         self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32)
@@ -97,7 +97,7 @@ class MpmPBDSolver:
         self.unit_cube_verts.from_numpy(unit_v)
         self.mesh_local_pos = None
         self.mesh_owner_id = None
-        self.mesh_vertics = None
+        self.mesh_vertices = None
         self.mesh_indices = None
         self.mesh_colors = None
 
