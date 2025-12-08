@@ -10,6 +10,7 @@ n_grid, steps, dt = 32, 25, 4e-4
 
 
 window = ti.ui.Window("MPM3D", (720, 720), vsync=True)
+gui = window.get_gui()
 canvas = window.get_canvas()
 canvas.set_background_color((0.1, 0.1, 0.1))
 scene = ti.ui.Scene()
@@ -114,6 +115,11 @@ def main():
                 scene.mesh(mpm.mesh_vertices, indices=mpm.mesh_indices, per_vertex_color=mpm.mesh_colors)
 
         scene.particles(mpm.x, radius=0.005, per_vertex_radius=mpm.radius, per_vertex_color=mpm.color)
+        # endregion
+
+        # region === information print ===
+        gui.text(f"Particles: {mpm.n_particles[None]}")
+        gui.text(f"Average Velocity: {mpm.average_velocity[None]}")
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))

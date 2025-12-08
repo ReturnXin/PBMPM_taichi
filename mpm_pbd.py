@@ -49,10 +49,12 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 3
-        self.iteration = 10
+        self.iteration = 5
+        self.average_velocity = ti.field(dtype=ti.f32, shape=())
+        self.average_height = ti.field(dtype=ti.f32, shape=())
 
         # ===Particle
-        self.max_particles = 200000
+        self.max_particles = 400000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
         self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
@@ -333,7 +335,7 @@ class MpmPBDSolver:
         # 0: Fluid
         self.mat_params[0].rho = 1.0
         self.mat_params[0].viscosity = 0.0
-        self.mat_params[0].stiffness = 0.8
+        self.mat_params[0].stiffness = 0.5
 
         # 1: Elastic
         self.mat_params[1].beta = 0.5
@@ -525,7 +527,7 @@ class MpmPBDSolver:
             color_foam = ti.Vector([1.0, 1.0, 1.0])
             pos_y = self.x[p].y
             bottom_y = self.bound * self.dx
-            surface_y = 0.2
+            surface_y = self.average_height[None] * 2
             t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
             t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
             base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
@@ -602,21 +604,21 @@ class MpmPBDSolver:
             self.update_grid(I)
 
         for p in range(self.n_particles[None]):
+            self.average_height[None] += self.x[p][1]
+        self.average_height[None] /= self.n_particles[None]
+
+        for p in range(self.n_particles[None]):
             self.G2P(p)
             if self.n_loop[None] == self.iteration - 1:
                 self.update_particles(p)
             self.solve_constraint(p)
-
-        # for I in ti.grouped(self.grid_m):
-        #     self.grid_dis[I] = ti.zero(self.grid_dis[I])
-        #     self.grid_m[I] = 0.0
-        #     self.grid_vol[I] = 0.0
 
     def substep(self):
         # self.add_external_force()
         for _ in range(self.iteration):
             self.solve_iteration()
             self.grid_snode.deactivate_all()
+        self.test_substep()
 
         self.n_loop[None] = 0
 
@@ -624,25 +626,11 @@ class MpmPBDSolver:
 
     # region === Utils ===
     @ti.kernel
-    def test(self):
-        average_alpha = 0.0
-        average_D_trace = 0.0
-        average_L = 0.0
+    def test_substep(self):
+        self.average_velocity[None] = 0.0
         for p in range(self.n_particles[None]):
-            average_alpha += 1 * (1.0 / self.L[p] - self.D[p].trace() - 1.0)
-            average_D_trace += self.D[p].trace()
-            average_L += 1 + self.D[p].trace()
-        average_alpha /= self.n_particles[None]
-        average_D_trace /= self.n_particles[None]
-        average_L /= self.n_particles[None]
-        print(
-            "=====================",
-            self.n_loop[None],
-            ":",
-            average_alpha,
-            average_D_trace,
-            1.1 * average_L,
-        )
+            self.average_velocity[None] += self.dis[p].norm()
+        self.average_velocity[None] /= self.n_particles[None]
 
     # @ti.kernel
     def generate_lines_vertex(self):
