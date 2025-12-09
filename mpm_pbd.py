@@ -49,9 +49,10 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 3
-        self.iteration = 5
+        self.iteration = 10
         self.average_velocity = ti.field(dtype=ti.f32, shape=())
         self.average_height = ti.field(dtype=ti.f32, shape=())
+        self.average_density_list = ti.field(dtype=ti.f32, shape=self.iteration)
 
         # ===Particle
         self.max_particles = 400000
@@ -368,13 +369,6 @@ class MpmPBDSolver:
             radius=0.006,
         )
 
-    @ti.kernel
-    def add_external_force(self):
-        for p in range(self.n_particles[None]):
-            # 施加重力
-            gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
-            self.dis[p] += gravity_impulse
-
     # region === MPM ===
     @ti.func
     def solve_constraint(self, p):
@@ -506,8 +500,9 @@ class MpmPBDSolver:
                 gathered_vol += weight * self.grid_vol[base + offset]
         if self.material[p] == 0:
             J = 1.0 / gathered_vol
+            ratio = 0.9
             if J < 1.0:
-                self.L[p] = 0.9 * self.L[p] + 0.1 * J
+                self.L[p] = ratio * self.L[p] + (1 - ratio) * J
 
         self.dis[p] = new_dis
         self.D[p] = new_D
@@ -596,7 +591,6 @@ class MpmPBDSolver:
 
     @ti.kernel
     def solve_iteration(self):
-        self.n_loop[None] += 1
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
@@ -613,12 +607,14 @@ class MpmPBDSolver:
                 self.update_particles(p)
             self.solve_constraint(p)
 
-    def substep(self):
-        # self.add_external_force()
+    def substep(self, gui):
         for _ in range(self.iteration):
             self.solve_iteration()
+            self.compute_average_iteration()
             self.grid_snode.deactivate_all()
-        self.test_substep()
+            self.n_loop[None] += 1
+        self.compute_average_substep()
+        self.print_substep(gui)
 
         self.n_loop[None] = 0
 
@@ -626,11 +622,28 @@ class MpmPBDSolver:
 
     # region === Utils ===
     @ti.kernel
-    def test_substep(self):
+    def compute_average_substep(self):
         self.average_velocity[None] = 0.0
         for p in range(self.n_particles[None]):
             self.average_velocity[None] += self.dis[p].norm()
         self.average_velocity[None] /= self.n_particles[None]
+
+    @ti.kernel
+    def compute_average_iteration(self):
+        average_density = 0.0
+        total_num = 0
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:
+                average_density += self.L[p]
+                total_num += 1
+        average_density /= total_num
+        self.average_density_list[self.n_loop[None]] = self.D[0].trace()
+
+    def print_substep(self, gui):
+        gui.text(f"Particles: {self.n_particles[None]}")
+        gui.text(f"Average Velocity: {self.average_velocity[None]}")
+        for i in range(self.iteration):
+            gui.text(f"{i}: {self.average_density_list[i]}")
 
     # @ti.kernel
     def generate_lines_vertex(self):

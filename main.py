@@ -36,9 +36,9 @@ def main():
     # region === scene setting ===
     scene.ambient_light((0.5, 0.5, 0.5))
     # mpm.add_box_obstacles(center=[0.5, 0.125, 0.5], size=[0.25, 0.25, 0.25], color=[0.6, 0.4, 0.8])
-    mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
+    # mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
     mpm.add_cube(
-        particle_num=2**15,
+        particle_num=2**16,
         center=[0.4, 0.5, 0.4],
         cube_size=[0.5, 0.5, 0.5],
         color=[0.1, 0.4, 0.8],
@@ -117,17 +117,12 @@ def main():
         scene.particles(mpm.x, radius=0.005, per_vertex_radius=mpm.radius, per_vertex_color=mpm.color)
         # endregion
 
-        # region === information print ===
-        gui.text(f"Particles: {mpm.n_particles[None]}")
-        gui.text(f"Average Velocity: {mpm.average_velocity[None]}")
-        # endregion
-
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
 
         canvas.scene(scene)
         window.show()
 
-        mpm.substep()
+        mpm.substep(gui)
 
 
 if __name__ == "__main__":
