@@ -48,11 +48,12 @@ class MpmPBDSolver:
         self.p_vol = 1 / 2**3
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
-        self.bound = 3
+        self.bound = 10
         self.iteration = 10
+        self.average_height = ti.field(dtype=ti.f32, shape=())
 
         # ===Particle
-        self.max_particles = 200000
+        self.max_particles = 500000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
         self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
@@ -74,7 +75,7 @@ class MpmPBDSolver:
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
         # ===Grid
-        self.n_grid = 48
+        self.n_grid = 64
         self.dx = 1 / self.n_grid
         self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
@@ -505,27 +506,41 @@ class MpmPBDSolver:
         self.D[p] = new_D
         # self.solve_constraints(p)
 
+    @ti.kernel
+    def compute_average_height(self):
+        self.average_height[None] = 0.0
+        total_num = 0
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:
+                self.average_height[None] += self.x[p].y
+                total_num += 1
+        self.average_height[None] /= total_num
+
+    @ti.func
+    def compute_water_color(self, p):
+        # Compute Color of The Water According to Speed
+        speed = self.dis[p].norm() / self.dt
+        color_deep = ti.Vector([0.05, 0.1, 0.35])
+        color_surface = ti.Vector([0.3, 0.7, 0.9])
+        color_foam = ti.Vector([1.0, 1.0, 1.0])
+        pos_y = self.x[p].y
+        bottom_y = self.bound * self.dx
+        surface_y = self.average_height[None] * 1.5
+        t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
+        t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
+        base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
+        foan_threshold = 1.0
+        t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
+        self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
+
     @ti.func
     def update_particles(self, p):
         if self.material[p] == 0:  # fluid
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
             self.L[p] = ti.max(self.L[p], 0.05)
+            self.compute_water_color(p)
 
-            # Compute Color of The Water According to Speed
-            speed = self.dis[p].norm() / self.dt
-            color_deep = ti.Vector([0.05, 0.1, 0.35])
-            color_surface = ti.Vector([0.3, 0.7, 0.9])
-            color_foam = ti.Vector([1.0, 1.0, 1.0])
-            pos_y = self.x[p].y
-            bottom_y = self.bound * self.dx
-            surface_y = 0.2
-            t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
-            t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
-            base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
-            foan_threshold = 1.0
-            t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
-            self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
         elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
             U, sig, V = ti.svd(self.F[p])
@@ -610,6 +625,7 @@ class MpmPBDSolver:
         # self.add_external_force()
         for _ in range(self.iteration):
             self.solve_iteration()
+            self.compute_average_height()
 
         self.n_loop[None] = 0
 
