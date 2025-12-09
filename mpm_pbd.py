@@ -51,6 +51,7 @@ class MpmPBDSolver:
         self.bound = 10
         self.iteration = 10
         self.average_height = ti.field(dtype=ti.f32, shape=())
+        self.fps_count = ti.field(dtype=ti.i32, shape=())
 
         # ===Particle
         self.max_particles = 500000
@@ -100,67 +101,19 @@ class MpmPBDSolver:
         self.num_grid_lines = 3 * (2 * (self.n_grid + 1) + 1)
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
-    @ti.kernel
-    def add_particles(
-        self,
-        new_particles_num: int,
-        new_particles_positions: ti.types.ndarray(),
-        new_particles_velocities: ti.types.ndarray(),
-        new_particles_material: ti.types.ndarray(),
-        new_particles_color: ti.types.ndarray(),
-        new_particles_radius: ti.types.ndarray(),
-    ):
-        for p in range(self.n_particles[None], self.n_particles[None] + new_particles_num):
-            v = ti.Vector.zero(float, self.dim)
-            x = ti.Vector.zero(float, self.dim)
-            for d in ti.static(range(self.dim)):
-                v[d] = new_particles_velocities[p - self.n_particles[None], d]
-                x[d] = new_particles_positions[p - self.n_particles[None], d]
-            color = ti.Vector.zero(float, 3)
-            for d in range(3):
-                color[d] = new_particles_color[p - self.n_particles[None], d]
-            self.x[p] = x
-            self.dis[p] = v * self.dt
-            self.color[p] = color
-            self.material[p] = new_particles_material[p - self.n_particles[None]]
-            self.radius[p] = new_particles_radius[p - self.n_particles[None]]
-            self.D[p] = ti.Matrix.zero(ti.f32, self.dim, self.dim)
-            if self.material[p] == 0:
-                self.L[p] = 1.0
-            elif self.material[p] == 1 or self.material[p] == 2:
-                self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
-        self.n_particles[None] += new_particles_num
-
-    def add_cube(
-        self,
-        particle_num,
-        center,
-        cube_size,
-        velocities=[0, 0, 0],
-        color=[1.0, 1.0, 1.0],
-        material=0,
-        radius=0.01,
-    ):
-        assert self.n_particles[None] + particle_num < self.max_particles
-        center = np.asarray(center, dtype=np.float32)
-        cube_size = np.asarray(cube_size, dtype=np.float32)
-        start = center - cube_size / 2
-        end = center + cube_size / 2
-        start = [max(self.bound * self.dx, start[d]) for d in range(self.dim)]
-        end = [min((self.n_grid - self.bound) * self.dx, end[d]) for d in range(self.dim)]
-        new_position = np.random.uniform(low=start, high=end, size=(particle_num, self.dim))
-        new_velocity = np.tile(np.array(velocities, dtype=np.float32), (particle_num, 1))
-        new_color = np.tile(np.array(color, dtype=np.float32), (particle_num, 1))
-        new_material = np.full(particle_num, material, dtype=np.int32)
-        new_radius = np.full(particle_num, radius, dtype=np.float32)
-        self.add_particles(
-            new_particles_num=particle_num,
-            new_particles_positions=new_position,
-            new_particles_velocities=new_velocity,
-            new_particles_material=new_material,
-            new_particles_color=new_color,
-            new_particles_radius=new_radius,
-        )
+        # ===Morton Code
+        self.sort_stage = 0
+        self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
+        self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
+        self.temp_x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)
+        self.temp_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)
+        self.temp_D = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)
+        self.temp_F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)
+        self.temp_L = ti.field(dtype=ti.f32, shape=self.max_particles)
+        self.temp_log_JP = ti.field(dtype=ti.f32, shape=self.max_particles)
+        self.temp_color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
+        self.temp_material = ti.field(dtype=ti.int32, shape=self.max_particles)
+        self.temp_radius = ti.field(dtype=ti.f32, shape=self.max_particles)
 
     # region === Obstacles ===
 
@@ -341,6 +294,135 @@ class MpmPBDSolver:
 
     # endregion
 
+    # region === Morton Code ===
+    @ti.func
+    def expand_bits(self, v):
+        v = ti.cast(v, ti.u32)
+        v = (v * ti.u32(0x00010001)) & ti.u32(0xFF0000FF)
+        v = (v * ti.u32(0x00000101)) & ti.u32(0x0F00F00F)
+        v = (v * ti.u32(0x00000011)) & ti.u32(0xC30C30C3)
+        v = (v * ti.u32(0x00000005)) & ti.u32(0x49249249)
+        return v
+
+    @ti.func
+    def get_morton_code(self, p):
+        grid_idx = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
+
+        x = ti.max(0, ti.min(grid_idx[0], self.n_grid - 1))
+        y = ti.max(0, ti.min(grid_idx[1], self.n_grid - 1))
+        z = ti.max(0, ti.min(grid_idx[2], self.n_grid - 1))
+
+        xx = self.expand_bits(x)
+        yy = self.expand_bits(y)
+        zz = self.expand_bits(z)
+
+        result = (xx) | (yy << 1) | (zz << 2)
+        return ti.cast(result, ti.i32)
+
+    @ti.kernel
+    def sort_particles_step1(self):
+        for p in range(self.max_particles):
+            if p < self.n_particles[None]:
+                self.particle_sort_keys[p] = self.get_morton_code(p)
+            else:
+                self.particle_sort_keys[p] = 2147483647
+            self.particle_sort_indices[p] = p
+
+    @ti.kernel
+    def sort_particles_step2(self):
+        for i in range(self.n_particles[None]):
+            old_idx = self.particle_sort_indices[i]
+            self.temp_x[i] = self.x[old_idx]
+            self.temp_dis[i] = self.dis[old_idx]
+            self.temp_D[i] = self.D[old_idx]
+            self.temp_F[i] = self.F[old_idx]
+            self.temp_L[i] = self.L[old_idx]
+            self.temp_log_JP[i] = self.log_JP[old_idx]
+            self.temp_color[i] = self.color[old_idx]
+            self.temp_material[i] = self.material[old_idx]
+            self.temp_radius[i] = self.radius[old_idx]
+
+        for i in range(self.n_particles[None]):
+            self.x[i] = self.temp_x[i]
+            self.dis[i] = self.temp_dis[i]
+            self.D[i] = self.temp_D[i]
+            self.F[i] = self.temp_F[i]
+            self.L[i] = self.temp_L[i]
+            self.log_JP[i] = self.temp_log_JP[i]
+            self.color[i] = self.temp_color[i]
+            self.material[i] = self.temp_material[i]
+            self.radius[i] = self.temp_radius[i]
+
+    def reorder_particles(self):
+        self.sort_particles_step1()
+        ti.algorithms.parallel_sort(self.particle_sort_keys, self.particle_sort_indices)
+        self.sort_particles_step2()
+
+    # endregion
+
+    # region === init ===
+    @ti.kernel
+    def add_particles(
+        self,
+        new_particles_num: int,
+        new_particles_positions: ti.types.ndarray(),
+        new_particles_velocities: ti.types.ndarray(),
+        new_particles_material: ti.types.ndarray(),
+        new_particles_color: ti.types.ndarray(),
+        new_particles_radius: ti.types.ndarray(),
+    ):
+        for p in range(self.n_particles[None], self.n_particles[None] + new_particles_num):
+            v = ti.Vector.zero(float, self.dim)
+            x = ti.Vector.zero(float, self.dim)
+            for d in ti.static(range(self.dim)):
+                v[d] = new_particles_velocities[p - self.n_particles[None], d]
+                x[d] = new_particles_positions[p - self.n_particles[None], d]
+            color = ti.Vector.zero(float, 3)
+            for d in range(3):
+                color[d] = new_particles_color[p - self.n_particles[None], d]
+            self.x[p] = x
+            self.dis[p] = v * self.dt
+            self.color[p] = color
+            self.material[p] = new_particles_material[p - self.n_particles[None]]
+            self.radius[p] = new_particles_radius[p - self.n_particles[None]]
+            self.D[p] = ti.Matrix.zero(ti.f32, self.dim, self.dim)
+            if self.material[p] == 0:
+                self.L[p] = 1.0
+            elif self.material[p] == 1 or self.material[p] == 2:
+                self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
+        self.n_particles[None] += new_particles_num
+
+    def add_cube(
+        self,
+        particle_num,
+        center,
+        cube_size,
+        velocities=[0, 0, 0],
+        color=[1.0, 1.0, 1.0],
+        material=0,
+        radius=0.01,
+    ):
+        assert self.n_particles[None] + particle_num < self.max_particles
+        center = np.asarray(center, dtype=np.float32)
+        cube_size = np.asarray(cube_size, dtype=np.float32)
+        start = center - cube_size / 2
+        end = center + cube_size / 2
+        start = [max(self.bound * self.dx, start[d]) for d in range(self.dim)]
+        end = [min((self.n_grid - self.bound) * self.dx, end[d]) for d in range(self.dim)]
+        new_position = np.random.uniform(low=start, high=end, size=(particle_num, self.dim))
+        new_velocity = np.tile(np.array(velocities, dtype=np.float32), (particle_num, 1))
+        new_color = np.tile(np.array(color, dtype=np.float32), (particle_num, 1))
+        new_material = np.full(particle_num, material, dtype=np.int32)
+        new_radius = np.full(particle_num, radius, dtype=np.float32)
+        self.add_particles(
+            new_particles_num=particle_num,
+            new_particles_positions=new_position,
+            new_particles_velocities=new_velocity,
+            new_particles_material=new_material,
+            new_particles_color=new_color,
+            new_particles_radius=new_radius,
+        )
+
     def init(self, hide_obstacles):
         self.init_material_params()
         if not hide_obstacles:
@@ -361,12 +443,7 @@ class MpmPBDSolver:
             radius=0.006,
         )
 
-    @ti.kernel
-    def add_external_force(self):
-        for p in range(self.n_particles[None]):
-            # 施加重力
-            gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
-            self.dis[p] += gravity_impulse
+    # endregion
 
     # region === MPM ===
     @ti.func
@@ -517,21 +594,25 @@ class MpmPBDSolver:
         self.average_height[None] /= total_num
 
     @ti.func
-    def compute_water_color(self, p):
+    def compute_water_color(self, p, color_option=0):
         # Compute Color of The Water According to Speed
-        speed = self.dis[p].norm() / self.dt
-        color_deep = ti.Vector([0.05, 0.1, 0.35])
-        color_surface = ti.Vector([0.3, 0.7, 0.9])
-        color_foam = ti.Vector([1.0, 1.0, 1.0])
-        pos_y = self.x[p].y
-        bottom_y = self.bound * self.dx
-        surface_y = self.average_height[None] * 1.5
-        t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
-        t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
-        base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
-        foan_threshold = 1.0
-        t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
-        self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
+        if color_option == 0:
+            speed = self.dis[p].norm() / self.dt
+            color_deep = ti.Vector([0.05, 0.1, 0.35])
+            color_surface = ti.Vector([0.3, 0.7, 0.9])
+            color_foam = ti.Vector([1.0, 1.0, 1.0])
+            pos_y = self.x[p].y
+            bottom_y = self.bound * self.dx
+            surface_y = self.average_height[None] * 1.5
+            t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
+            t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
+            base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
+            foan_threshold = 1.0
+            t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
+            self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
+        elif color_option == 1:
+            val = p / self.n_particles[None]
+            self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
 
     @ti.func
     def update_particles(self, p):
@@ -539,7 +620,7 @@ class MpmPBDSolver:
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
             self.L[p] = ti.max(self.L[p], 0.05)
-            self.compute_water_color(p)
+            self.compute_water_color(p, 1)
 
         elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
@@ -618,14 +699,19 @@ class MpmPBDSolver:
             self.grid_m[I] = 0.0
             self.grid_vol[I] = 0.0
 
+        ti.loop_config(parallelize=8, block_dim=32)
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
     def substep(self):
-        # self.add_external_force()
+        self.fps_count[None] += 1
+
         for _ in range(self.iteration):
             self.solve_iteration()
             self.compute_average_height()
+
+        # if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
+        #     self.reorder_particles()
 
         self.n_loop[None] = 0
 

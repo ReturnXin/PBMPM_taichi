@@ -4,7 +4,7 @@ import utils_renderer
 
 from mpm_pbd import MpmPBDSolver
 
-ti.init(arch=ti.gpu)
+ti.init(arch=ti.gpu, kernel_profiler=True)
 
 n_grid, steps, dt = 32, 25, 4e-4
 
@@ -64,11 +64,11 @@ def main():
     # )
 
     mpm.init(hide_obstacles)
+    scene.set_camera(camera)
     # endregion
 
     while window.running:
         # camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
-        scene.set_camera(camera)
 
         # region === process input ===
         mouse_x, mouse_y = window.get_cursor_pos()
@@ -120,8 +120,14 @@ def main():
 
         canvas.scene(scene)
         window.show()
+        ti.profiler.clear_kernel_profiler_info()
 
         mpm.substep()
+
+        if mpm.fps_count[None] == 1000:
+            print(f"===== Profiling Report (Sort Stage: {mpm.sort_stage}) =====")
+            ti.profiler.print_kernel_profiler_info(mode="trace")
+            break
 
 
 if __name__ == "__main__":
