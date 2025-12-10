@@ -115,6 +115,11 @@ class MpmPBDSolver:
         self.temp_material = ti.field(dtype=ti.int32, shape=self.max_particles)
         self.temp_radius = ti.field(dtype=ti.f32, shape=self.max_particles)
 
+        # ===Dynamic Bound
+        self.dynamic_grid = False
+        self.grid_min = ti.field(dtype=ti.i32, shape=self.dim)
+        self.grid_max = ti.field(dtype=ti.i32, shape=self.dim)
+
     # region === Obstacles ===
 
     def add_ball_obstacles(self, center, radius, color):
@@ -446,6 +451,18 @@ class MpmPBDSolver:
     # endregion
 
     # region === MPM ===
+    @ti.kernel
+    def compute_active_bounds(self):
+        for i in ti.static(range(3)):
+            self.grid_min[i] = 2147483647
+            self.grid_max[i] = -2147483648
+
+        for p in range(self.n_particles[None]):
+            base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
+            for i in ti.static(range(3)):
+                ti.atomic_min(self.grid_min[i], base_pos[i])
+                ti.atomic_max(self.grid_max[i], base_pos[i])
+
     @ti.func
     def solve_constraint(self, p):
         if self.material[p] == 0:  # fluid
@@ -685,7 +702,26 @@ class MpmPBDSolver:
     @ti.kernel
     def solve_iteration(self):
         self.n_loop[None] += 1
-        for I in ti.grouped(self.grid_m):
+
+        # ===计算活跃包围盒===
+        min_x = 0
+        max_x = self.n_grid
+        min_y = 0
+        max_y = self.n_grid
+        min_z = 0
+        max_z = self.n_grid
+        if self.dynamic_grid:
+            padding = 3
+            min_x = ti.max(0, self.grid_min[0] - padding)
+            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
+            min_y = ti.max(0, self.grid_min[1] - padding)
+            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
+            min_z = ti.max(0, self.grid_min[2] - padding)
+            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
+
+        # ==end==
+
+        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
             self.update_grid(I)
 
         for p in range(self.n_particles[None]):
@@ -694,7 +730,7 @@ class MpmPBDSolver:
                 self.update_particles(p)
             self.solve_constraint(p)
 
-        for I in ti.grouped(self.grid_m):
+        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
             self.grid_dis[I] = ti.zero(self.grid_dis[I])
             self.grid_m[I] = 0.0
             self.grid_vol[I] = 0.0
@@ -705,7 +741,8 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
-
+        if self.dynamic_grid:
+            self.compute_active_bounds()
         for _ in range(self.iteration):
             self.solve_iteration()
             self.compute_average_height()

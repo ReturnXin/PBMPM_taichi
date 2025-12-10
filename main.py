@@ -10,6 +10,7 @@ n_grid, steps, dt = 32, 25, 4e-4
 
 
 window = ti.ui.Window("MPM3D", (720, 720), vsync=True)
+gui = window.get_gui()
 canvas = window.get_canvas()
 canvas.set_background_color((0.1, 0.1, 0.1))
 scene = ti.ui.Scene()
@@ -116,6 +117,11 @@ def main():
         scene.particles(mpm.x, radius=0.005, per_vertex_radius=mpm.radius, per_vertex_color=mpm.color)
         # endregion
 
+        # region === Print Information ===
+        gui.text(f"min:({mpm.grid_min[0]},{mpm.grid_min[1]},{mpm.grid_min[2]})")
+        gui.text(f"max:({mpm.grid_max[0]},{mpm.grid_max[1]},{mpm.grid_max[2]})")
+        # endregion
+
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
 
         canvas.scene(scene)
@@ -124,7 +130,7 @@ def main():
 
         mpm.substep()
 
-        if mpm.fps_count[None] == 1000:
+        if mpm.fps_count[None] == 401:
             print(f"===== Profiling Report (Sort Stage: {mpm.sort_stage}) =====")
             ti.profiler.print_kernel_profiler_info(mode="trace")
             break
