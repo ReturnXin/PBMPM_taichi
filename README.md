@@ -2,7 +2,7 @@
 
 使用taichi语言实现的pbmpm流体仿真模拟器
 
-![](./assets/流体 (online-video-cutter.com).gif)
+![]([./assets/流体 (online-video-cutter.com).gif](https://github.com/ReturnXin/PBMPM_taichi/blob/main/assets/%E6%B5%81%E4%BD%93%20(online-video-cutter.com).gif?raw=true))
 
 ![](./assets/弹性体2 (online-video-cutter.com)-1765972963675-3.gif)
 
