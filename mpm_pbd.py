@@ -38,7 +38,7 @@ class MpmPBDSolver:
     def __init__(self):
 
         self.dim = 3
-        self.dt = 8e-3
+        self.dt = 7e-3
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
@@ -49,12 +49,11 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 3
-        self.iteration = 5
-        self.average_velocity = ti.field(dtype=ti.f32, shape=())
+        self.iteration = 10
         self.average_height = ti.field(dtype=ti.f32, shape=())
 
         # ===Particle
-        self.max_particles = 400000
+        self.max_particles = 200000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
         self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
@@ -76,18 +75,12 @@ class MpmPBDSolver:
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
         # ===Grid
-        self.n_grid = 48
+        self.n_grid = 32
         self.dx = 1 / self.n_grid
-        self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32)
-        self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32)
-        self.grid_m = ti.field(dtype=ti.f32)
-        self.grid_vol = ti.field(dtype=ti.f32)
-        # Sparse Grid
-        block_size = 8
-        n_memory_size = self.n_grid * 2
-        self.grid_snode = ti.root.pointer(ti.ijk, n_memory_size // block_size)
-        self.pixel = self.grid_snode.dense(ti.ijk, block_size)
-        self.pixel.place(self.grid_v, self.grid_dis, self.grid_m, self.grid_vol)
+        self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
+        self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
+        self.grid_m = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
+        self.grid_vol = ti.field(dtype=ti.f32, shape=(self.n_grid,) * self.dim)
 
         # ===Obstacles
         self.max_num_obstacles = 10
@@ -99,7 +92,7 @@ class MpmPBDSolver:
         self.unit_cube_verts.from_numpy(unit_v)
         self.mesh_local_pos = None
         self.mesh_owner_id = None
-        self.mesh_vertices = None
+        self.mesh_vertics = None
         self.mesh_indices = None
         self.mesh_colors = None
 
@@ -335,7 +328,7 @@ class MpmPBDSolver:
         # 0: Fluid
         self.mat_params[0].rho = 1.0
         self.mat_params[0].viscosity = 0.0
-        self.mat_params[0].stiffness = 0.5
+        self.mat_params[0].stiffness = 0.8
 
         # 1: Elastic
         self.mat_params[1].beta = 0.5
@@ -513,27 +506,41 @@ class MpmPBDSolver:
         self.D[p] = new_D
         # self.solve_constraints(p)
 
+    @ti.kernel
+    def compute_average_height(self):
+        self.average_height[None] = 0.0
+        total_num = 0
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:
+                self.average_height[None] += self.x[p].y
+                total_num += 1
+        self.average_height[None] /= total_num
+
+    @ti.func
+    def compute_water_color(self, p):
+        # Compute Color of The Water According to Speed
+        speed = self.dis[p].norm() / self.dt
+        color_deep = ti.Vector([0.05, 0.1, 0.35])
+        color_surface = ti.Vector([0.3, 0.7, 0.9])
+        color_foam = ti.Vector([1.0, 1.0, 1.0])
+        pos_y = self.x[p].y
+        bottom_y = self.bound * self.dx
+        surface_y = self.average_height[None] * 1.5
+        t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
+        t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
+        base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
+        foan_threshold = 1.0
+        t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
+        self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
+
     @ti.func
     def update_particles(self, p):
         if self.material[p] == 0:  # fluid
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
             self.L[p] = ti.max(self.L[p], 0.05)
+            self.compute_water_color(p)
 
-            # Compute Color of The Water According to Speed
-            speed = self.dis[p].norm() / self.dt
-            color_deep = ti.Vector([0.05, 0.1, 0.35])
-            color_surface = ti.Vector([0.3, 0.7, 0.9])
-            color_foam = ti.Vector([1.0, 1.0, 1.0])
-            pos_y = self.x[p].y
-            bottom_y = self.bound * self.dx
-            surface_y = self.average_height[None] * 2
-            t_depth = ti.math.clamp((pos_y - bottom_y) / (surface_y - bottom_y), 0.0, 1.0)
-            t_depth_smooth = ti.math.smoothstep(0.0, 1.0, t_depth)
-            base_color = ti.math.mix(color_deep, color_surface, t_depth_smooth)
-            foan_threshold = 1.0
-            t_foam = ti.math.clamp((speed - foan_threshold) / 3.0, 0.0, 1.0)
-            self.color[p] = ti.math.mix(base_color, color_foam, t_foam)
         elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
             U, sig, V = ti.svd(self.F[p])
@@ -597,15 +604,8 @@ class MpmPBDSolver:
     @ti.kernel
     def solve_iteration(self):
         self.n_loop[None] += 1
-        for p in range(self.n_particles[None]):
-            self.P2G(p)
-
         for I in ti.grouped(self.grid_m):
             self.update_grid(I)
-
-        for p in range(self.n_particles[None]):
-            self.average_height[None] += self.x[p][1]
-        self.average_height[None] /= self.n_particles[None]
 
         for p in range(self.n_particles[None]):
             self.G2P(p)
@@ -613,12 +613,19 @@ class MpmPBDSolver:
                 self.update_particles(p)
             self.solve_constraint(p)
 
+        for I in ti.grouped(self.grid_m):
+            self.grid_dis[I] = ti.zero(self.grid_dis[I])
+            self.grid_m[I] = 0.0
+            self.grid_vol[I] = 0.0
+
+        for p in range(self.n_particles[None]):
+            self.P2G(p)
+
     def substep(self):
         # self.add_external_force()
         for _ in range(self.iteration):
             self.solve_iteration()
-            self.grid_snode.deactivate_all()
-        self.test_substep()
+            self.compute_average_height()
 
         self.n_loop[None] = 0
 
@@ -626,11 +633,25 @@ class MpmPBDSolver:
 
     # region === Utils ===
     @ti.kernel
-    def test_substep(self):
-        self.average_velocity[None] = 0.0
+    def test(self):
+        average_alpha = 0.0
+        average_D_trace = 0.0
+        average_L = 0.0
         for p in range(self.n_particles[None]):
-            self.average_velocity[None] += self.dis[p].norm()
-        self.average_velocity[None] /= self.n_particles[None]
+            average_alpha += 1 * (1.0 / self.L[p] - self.D[p].trace() - 1.0)
+            average_D_trace += self.D[p].trace()
+            average_L += 1 + self.D[p].trace()
+        average_alpha /= self.n_particles[None]
+        average_D_trace /= self.n_particles[None]
+        average_L /= self.n_particles[None]
+        print(
+            "=====================",
+            self.n_loop[None],
+            ":",
+            average_alpha,
+            average_D_trace,
+            1.1 * average_L,
+        )
 
     # @ti.kernel
     def generate_lines_vertex(self):
