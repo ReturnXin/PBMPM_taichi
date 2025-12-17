@@ -2,6 +2,12 @@
 
 使用taichi语言实现的pbmpm流体仿真模拟器
 
+![](./assets/流体 (online-video-cutter.com).gif)
+
+![](./assets/弹性体2 (online-video-cutter.com)-1765972963675-3.gif)
+
+![](./assets/沙子 (online-video-cutter.com).gif)
+
 # Install
 
 ```txt
@@ -20,3 +26,5 @@ python: 3.10.11
 # Reference
 
 > *Chris Lewin*. **[A Position Based Material Point Method](https://seed.ea.com/)**. ACM SIGGRAPH 2024.
+>
+> [**(SIGGRAPH Asia 2019) Taichi: High-Performance Computation on Sparse Data Structures**](https://yuanming.taichi.graphics/publication/2019-taichi/taichi-lang.pdf) [[Video\]](https://youtu.be/wKw8LMF3Djo) [[BibTex\]](https://raw.githubusercontent.com/taichi-dev/taichi/master/misc/taichi_bibtex.txt) [[Code\]](https://github.com/taichi-dev/taichi)

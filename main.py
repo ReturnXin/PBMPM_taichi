@@ -35,15 +35,15 @@ def main():
     # region === scene setting ===
     scene.ambient_light((0.5, 0.5, 0.5))
     # mpm.add_box_obstacles(center=[0.5, 0.125, 0.5], size=[0.25, 0.25, 0.25], color=[0.6, 0.4, 0.8])
-    mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
-    mpm.add_cube(
-        particle_num=2**16,
-        center=[0.4, 0.5, 0.4],
-        cube_size=[0.5, 0.5, 0.5],
-        color=[0.1, 0.4, 0.8],
-        material=0,
-        radius=0.005,
-    )
+    # mpm.add_ball_obstacles(center=[0.5, 0.15, 0.5], radius=0.20, color=[0.6, 0.4, 0.8])
+    # mpm.add_cube(
+    #     particle_num=2**15,
+    #     center=[0.4, 0.5, 0.4],
+    #     cube_size=[0.5, 0.5, 0.5],
+    #     color=[0.1, 0.4, 0.8],
+    #     material=0,
+    #     radius=0.008,
+    # )
 
     # mpm.add_cube(
     #     particle_num=2**13,
@@ -54,14 +54,14 @@ def main():
     #     radius=0.008,
     # )
 
-    # mpm.add_cube(
-    #     particle_num=2**13,
-    #     center=[0.4, 0.25, 0.4],
-    #     cube_size=[0.5, 0.5, 0.5],
-    #     color=[0.85, 0.75, 0.55],
-    #     material=2,
-    #     radius=0.006,
-    # )
+    mpm.add_cube(
+        particle_num=2**13,
+        center=[0.4, 0.25, 0.4],
+        cube_size=[0.5, 0.5, 0.5],
+        color=[0.85, 0.75, 0.55],
+        material=2,
+        radius=0.006,
+    )
 
     mpm.init(hide_obstacles)
     # endregion

@@ -38,7 +38,7 @@ class MpmPBDSolver:
     def __init__(self):
 
         self.dim = 3
-        self.dt = 8e-3
+        self.dt = 7e-3
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
@@ -48,12 +48,12 @@ class MpmPBDSolver:
         self.p_vol = 1 / 2**3
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
-        self.bound = 10
+        self.bound = 3
         self.iteration = 10
         self.average_height = ti.field(dtype=ti.f32, shape=())
 
         # ===Particle
-        self.max_particles = 500000
+        self.max_particles = 200000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
         self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
@@ -75,7 +75,7 @@ class MpmPBDSolver:
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
         # ===Grid
-        self.n_grid = 64
+        self.n_grid = 32
         self.dx = 1 / self.n_grid
         self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
