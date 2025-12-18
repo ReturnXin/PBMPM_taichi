@@ -3,9 +3,9 @@
 使用taichi语言实现的pbmpm流体仿真模拟器
 
 <div style="display: flex; justify-content: space-between;">   
-    <img src="./assets/流体 (online-video-cutter.com).gif" style="zoom:50%;" />
-    <img src="./assets/弹性体2 (online-video-cutter.com)-1765972963675-3.gif" style="zoom:50%;" />
-    <img src="./assets/沙子 (online-video-cutter.com).gif" style="zoom:50%;" />
+    <img src="./assets/流体 (online-video-cutter.com).gif" width="32%" />
+    <img src="./assets/弹性体2 (online-video-cutter.com)-1765972963675-3.gif" width="32%" />
+    <img src="./assets/沙子 (online-video-cutter.com).gif" width="32%" />
 </div>
 
 # Install
