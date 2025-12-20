@@ -130,7 +130,7 @@ def main():
 
         mpm.substep()
 
-        if mpm.fps_count[None] == 401:
+        if mpm.fps_count[None] == 500:
             print(f"===== Profiling Report (Sort Stage: {mpm.sort_stage}) =====")
             ti.profiler.print_kernel_profiler_info(mode="trace")
             break

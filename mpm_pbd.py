@@ -1,6 +1,7 @@
 import taichi as ti
 import numpy as np
 from utils_renderer import get_unit_cube_mesh, get_sphere_mesh
+from morton_code import get_morton_code
 
 MaterialParam = ti.types.struct(
     rho=ti.f32,
@@ -300,35 +301,12 @@ class MpmPBDSolver:
     # endregion
 
     # region === Morton Code ===
-    @ti.func
-    def expand_bits(self, v):
-        v = ti.cast(v, ti.u32)
-        v = (v * ti.u32(0x00010001)) & ti.u32(0xFF0000FF)
-        v = (v * ti.u32(0x00000101)) & ti.u32(0x0F00F00F)
-        v = (v * ti.u32(0x00000011)) & ti.u32(0xC30C30C3)
-        v = (v * ti.u32(0x00000005)) & ti.u32(0x49249249)
-        return v
-
-    @ti.func
-    def get_morton_code(self, p):
-        grid_idx = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
-
-        x = ti.max(0, ti.min(grid_idx[0], self.n_grid - 1))
-        y = ti.max(0, ti.min(grid_idx[1], self.n_grid - 1))
-        z = ti.max(0, ti.min(grid_idx[2], self.n_grid - 1))
-
-        xx = self.expand_bits(x)
-        yy = self.expand_bits(y)
-        zz = self.expand_bits(z)
-
-        result = (xx) | (yy << 1) | (zz << 2)
-        return ti.cast(result, ti.i32)
 
     @ti.kernel
     def sort_particles_step1(self):
         for p in range(self.max_particles):
             if p < self.n_particles[None]:
-                self.particle_sort_keys[p] = self.get_morton_code(p)
+                self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
             else:
                 self.particle_sort_keys[p] = 2147483647
             self.particle_sort_indices[p] = p
@@ -735,7 +713,7 @@ class MpmPBDSolver:
             self.grid_m[I] = 0.0
             self.grid_vol[I] = 0.0
 
-        ti.loop_config(parallelize=8, block_dim=32)
+        ti.loop_config(parallelize=8, block_dim=128)
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
@@ -747,8 +725,8 @@ class MpmPBDSolver:
             self.solve_iteration()
             self.compute_average_height()
 
-        # if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
-        #     self.reorder_particles()
+        if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
+            self.reorder_particles()
 
         self.n_loop[None] = 0
 
