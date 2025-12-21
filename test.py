@@ -442,24 +442,6 @@ class MpmPBDSolver:
                 ti.atomic_max(self.grid_max[i], base_pos[i])
 
     @ti.func
-    def get_active_bounds(self):
-        min_x = 0
-        max_x = self.n_grid
-        min_y = 0
-        max_y = self.n_grid
-        min_z = 0
-        max_z = self.n_grid
-        if self.dynamic_grid:
-            padding = 3
-            min_x = ti.max(0, self.grid_min[0] - padding)
-            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
-            min_y = ti.max(0, self.grid_min[1] - padding)
-            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
-            min_z = ti.max(0, self.grid_min[2] - padding)
-            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
-        return min_x, max_x, min_y, max_y, min_z, max_z
-
-    @ti.func
     def solve_constraint(self, p):
         if self.material[p] == 0:  # fluid
             # (A) 黏度约束
@@ -514,101 +496,87 @@ class MpmPBDSolver:
             deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
             self.D[p] += alpha_visc * 0.5 * deviatoric
 
-    @ti.kernel
-    def P2G(self):
-        for p in range(self.n_particles[None]):
-            Xp = self.x[p] / self.dx
-            base = int(Xp - 0.5)  # 向下取整
-            fx = Xp - base
-            w = [
-                0.5 * (1.5 - fx) ** 2,  # 对应网格节点i1
-                0.75 - (fx - 1) ** 2,  # 对应网格节点i+1
-                0.5 * (fx - 0.5) ** 2,  # 对应网格节点i+2
-            ]
+    @ti.func
+    def P2G(self, p):
+        Xp = self.x[p] / self.dx
+        base = int(Xp - 0.5)  # 向下取整
+        fx = Xp - base
+        w = [
+            0.5 * (1.5 - fx) ** 2,  # 对应网格节点i1
+            0.75 - (fx - 1) ** 2,  # 对应网格节点i+1
+            0.5 * (fx - 0.5) ** 2,  # 对应网格节点i+2
+        ]
 
-            for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
-                weight = 1.0
-                dpos = (offset - fx) * self.dx
-                for i in ti.static(range(self.dim)):
-                    weight *= w[offset[i]][i]
-                momentum = weight * (self.dis[p] + self.D[p] @ dpos)
-                self.grid_dis[base + offset] += momentum
-                self.grid_m[base + offset] += weight
-                if self.material[p] == 0:
-                    self.grid_vol[base + offset] += weight * self.p_vol
-
-    @ti.kernel
-    def update_grid(self):
-        min_x, max_x, min_y, max_y, min_z, max_z = self.get_active_bounds()
-        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
-            # 时间步进，网格更新
-            if self.grid_m[I] > 1e-6:
-                self.grid_dis[I] /= self.grid_m[I]
-                grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
-                grid_disp = self.grid_dis[I]
-                for i in range(self.num_obstacles[None]):
-                    predict_pos = grid_disp + grid_pos
-                    is_collide, _, normal_in, point_on_surface = self.collide(predict_pos, self.obstacles[i])
-                    if is_collide:
-                        v_proj = grid_disp.dot(normal_in)
-                        if v_proj > 0:
-                            grid_disp -= v_proj * normal_in
-                self.grid_dis[I] = grid_disp
-
-                # TODO: 为了沙子堆积添加了摩擦力，感觉需要把摩擦力移动到其他地方
-                boundary_friction = 0.0
-                damping = 1.0 - boundary_friction
-                for d in ti.static(range(self.dim)):
-                    if I[d] < self.bound and self.grid_dis[I][d] < 0:
-                        self.grid_dis[I][d] = 0
-                        self.grid_dis[I] *= damping
-                    if I[d] > self.n_grid - self.bound and self.grid_dis[I][d] > 0:
-                        self.grid_dis[I][d] = 0
-                        self.grid_dis[I] *= damping
-            else:
-                self.grid_dis[I] = ti.Vector.zero(ti.f32, self.dim)
-
-    @ti.kernel
-    def G2P_and_UpdateParticle(self):
-        for p in range(self.n_particles[None]):
-            Xp = self.x[p] / self.dx
-            base = int(Xp - 0.5)
-            fx = Xp - base
-            w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-
-            new_dis = ti.zero(self.dis[p])
-            new_D = ti.zero(self.D[p])
-
-            gathered_vol = 0.0
-
-            for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
-                dpos = (offset - fx) * self.dx
-                weight = 1.0
-                for i in ti.static(range(self.dim)):
-                    weight *= w[offset[i]][i]
-                g_dis = self.grid_dis[base + offset]
-                new_dis += weight * g_dis
-                new_D += weight * (4 * g_dis.outer_product(dpos) / self.dx**2)
-                if self.material[p] == 0:
-                    gathered_vol += weight * self.grid_vol[base + offset]
+        for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
+            weight = 1.0
+            dpos = (offset - fx) * self.dx
+            for i in ti.static(range(self.dim)):
+                weight *= w[offset[i]][i]
+            momentum = weight * (self.dis[p] + self.D[p] @ dpos)
+            self.grid_dis[base + offset] += momentum
+            self.grid_m[base + offset] += weight
             if self.material[p] == 0:
-                J = 1.0 / gathered_vol
-                if J < 1.0:
-                    self.L[p] = 0.9 * self.L[p] + 0.1 * J
+                self.grid_vol[base + offset] += weight * self.p_vol
 
-            self.dis[p] = new_dis
-            self.D[p] = new_D
-            if self.n_loop[None] == self.iteration - 1:
-                self.update_particles(p)
-            self.solve_constraint(p)
+    @ti.func
+    def update_grid(self, I):
+        # 时间步进，网格更新
+        if self.grid_m[I] > 1e-6:
+            self.grid_dis[I] /= self.grid_m[I]
+            grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
+            grid_disp = self.grid_dis[I]
+            for i in range(self.num_obstacles[None]):
+                predict_pos = grid_disp + grid_pos
+                is_collide, _, normal_in, point_on_surface = self.collide(predict_pos, self.obstacles[i])
+                if is_collide:
+                    v_proj = grid_disp.dot(normal_in)
+                    if v_proj > 0:
+                        grid_disp -= v_proj * normal_in
+            self.grid_dis[I] = grid_disp
 
-    @ti.kernel
-    def reset_grid(self):
-        min_x, max_x, min_y, max_y, min_z, max_z = self.get_active_bounds()
-        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
-            self.grid_dis[I] = ti.zero(self.grid_dis[I])
-            self.grid_m[I] = 0.0
-            self.grid_vol[I] = 0.0
+            # TODO: 为了沙子堆积添加了摩擦力，感觉需要把摩擦力移动到其他地方
+            boundary_friction = 0.0
+            damping = 1.0 - boundary_friction
+            for d in ti.static(range(self.dim)):
+                if I[d] < self.bound and self.grid_dis[I][d] < 0:
+                    self.grid_dis[I][d] = 0
+                    self.grid_dis[I] *= damping
+                if I[d] > self.n_grid - self.bound and self.grid_dis[I][d] > 0:
+                    self.grid_dis[I][d] = 0
+                    self.grid_dis[I] *= damping
+        else:
+            self.grid_dis[I] = ti.Vector.zero(ti.f32, self.dim)
+
+    @ti.func
+    def G2P(self, p):
+        Xp = self.x[p] / self.dx
+        base = int(Xp - 0.5)
+        fx = Xp - base
+        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
+
+        new_dis = ti.zero(self.dis[p])
+        new_D = ti.zero(self.D[p])
+
+        gathered_vol = 0.0
+
+        for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
+            dpos = (offset - fx) * self.dx
+            weight = 1.0
+            for i in ti.static(range(self.dim)):
+                weight *= w[offset[i]][i]
+            g_dis = self.grid_dis[base + offset]
+            new_dis += weight * g_dis
+            new_D += weight * (4 * g_dis.outer_product(dpos) / self.dx**2)
+            if self.material[p] == 0:
+                gathered_vol += weight * self.grid_vol[base + offset]
+        if self.material[p] == 0:
+            J = 1.0 / gathered_vol
+            if J < 1.0:
+                self.L[p] = 0.9 * self.L[p] + 0.1 * J
+
+        self.dis[p] = new_dis
+        self.D[p] = new_D
+        # self.solve_constraints(p)
 
     @ti.kernel
     def compute_average_height(self):
@@ -709,13 +677,45 @@ class MpmPBDSolver:
             if self.x[p][d] > 1:
                 self.x[p][d] = 1
 
+    @ti.kernel
     def solve_iteration(self):
         self.n_loop[None] += 1
-        self.update_grid()
-        self.G2P_and_UpdateParticle()
-        self.reset_grid()
-        self.P2G()
-        self.compute_average_height()
+
+        # ===计算活跃包围盒===
+        min_x = 0
+        max_x = self.n_grid
+        min_y = 0
+        max_y = self.n_grid
+        min_z = 0
+        max_z = self.n_grid
+        if self.dynamic_grid:
+            padding = 3
+            min_x = ti.max(0, self.grid_min[0] - padding)
+            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
+            min_y = ti.max(0, self.grid_min[1] - padding)
+            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
+            min_z = ti.max(0, self.grid_min[2] - padding)
+            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
+
+        # ==end==
+
+        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
+            self.update_grid(I)
+
+        for p in range(self.n_particles[None]):
+            self.G2P(p)
+            if self.n_loop[None] == self.iteration - 1:
+                self.update_particles(p)
+            self.solve_constraint(p)
+
+        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
+            self.grid_dis[I] = ti.zero(self.grid_dis[I])
+            self.grid_m[I] = 0.0
+            self.grid_vol[I] = 0.0
+
+        ti.loop_config(parallelize=8, block_dim=128)
+        for p in range(self.n_particles[None]):
+            self.P2G(p)
 
     def substep(self):
         self.fps_count[None] += 1
@@ -723,6 +723,7 @@ class MpmPBDSolver:
             self.compute_active_bounds()
         for _ in range(self.iteration):
             self.solve_iteration()
+            self.compute_average_height()
 
         if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
             self.reorder_particles()
