@@ -783,7 +783,7 @@ class MpmPBDSolver:
     @ti.kernel
     def apply_interia(self, interia_force: ti.types.vector(3, float)):
         for p in range(self.n_particles[None]):
-            if self.material[p] == 2:
+            if self.material[p] == 0:
                 self.dis[p] += interia_force
 
     # endregion

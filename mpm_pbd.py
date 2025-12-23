@@ -50,9 +50,10 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 10
-        self.iteration = 10
+        self.iteration = 5
         self.average_height = ti.field(dtype=ti.f32, shape=())
         self.fps_count = ti.field(dtype=ti.i32, shape=())
+        self.interia_force = ti.Vector.field(self.dim, dtype=ti.f32, shape=())
 
         # ===Particle
         self.max_particles = 200000
@@ -77,7 +78,7 @@ class MpmPBDSolver:
         self.material = ti.field(dtype=ti.int32, shape=self.max_particles)  # 0：fluid，1: jelly, 2: snow
 
         # ===Grid
-        self.n_grid = 64
+        self.n_grid = 48
         self.dx = 1 / self.n_grid
         self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
         self.grid_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid,) * self.dim)
@@ -103,6 +104,7 @@ class MpmPBDSolver:
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
         # ===Morton Code
+        self.use_morton_code = True
         self.sort_stage = 0
         self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
@@ -115,6 +117,8 @@ class MpmPBDSolver:
         self.temp_color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
         self.temp_material = ti.field(dtype=ti.int32, shape=self.max_particles)
         self.temp_radius = ti.field(dtype=ti.f32, shape=self.max_particles)
+        self.color_bit = ti.field(dtype=ti.i32, shape=())
+        self.color_index = ti.field(dtype=ti.f32, shape=self.max_particles)
 
         # ===Dynamic Bound
         self.dynamic_grid = False
@@ -431,9 +435,6 @@ class MpmPBDSolver:
     # region === MPM ===
     @ti.kernel
     def compute_active_bounds(self):
-        for i in ti.static(range(3)):
-            self.grid_min[i] = 2147483647
-            self.grid_max[i] = -2147483648
 
         for p in range(self.n_particles[None]):
             base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
@@ -516,7 +517,19 @@ class MpmPBDSolver:
 
     @ti.kernel
     def P2G(self):
-        for p in range(self.n_particles[None]):
+        ti.loop_config(block_dim=128)
+        n = self.n_particles[None]
+        for i in range(n):
+            p = 0
+            if self.use_morton_code:
+                # if False:
+                # p = (i ^ (i >> 16)) % self.n_particles[None]
+                multiplier = 1000003
+                p = (i * multiplier) % n
+
+                p = (i + (i % 8) * (n // 8)) % n
+            else:
+                p = i
             Xp = self.x[p] / self.dx
             base = int(Xp - 0.5)  # 向下取整
             fx = Xp - base
@@ -529,8 +542,7 @@ class MpmPBDSolver:
             for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
                 weight = 1.0
                 dpos = (offset - fx) * self.dx
-                for i in ti.static(range(self.dim)):
-                    weight *= w[offset[i]][i]
+                weight *= w[offset[0]][0] * w[offset[1]][1] * w[offset[2]][2]
                 momentum = weight * (self.dis[p] + self.D[p] @ dpos)
                 self.grid_dis[base + offset] += momentum
                 self.grid_m[base + offset] += weight
@@ -694,6 +706,7 @@ class MpmPBDSolver:
 
         gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
         self.dis[p] += gravity_impulse
+        self.dis[p] += self.interia_force[None]
 
         # SDF碰撞检测
         for i in range(self.num_obstacles[None]):
@@ -709,6 +722,16 @@ class MpmPBDSolver:
             if self.x[p][d] > 1:
                 self.x[p][d] = 1
 
+        # 动态网格
+        if self.dynamic_grid:
+            for i in ti.static(range(3)):
+                self.grid_min[i] = 2147483647
+                self.grid_max[i] = -2147483648
+            base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
+            for i in ti.static(range(3)):
+                ti.atomic_min(self.grid_min[i], base_pos[i])
+                ti.atomic_max(self.grid_max[i], base_pos[i])
+
     def solve_iteration(self):
         self.n_loop[None] += 1
         self.update_grid()
@@ -719,13 +742,13 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
-        if self.dynamic_grid:
-            self.compute_active_bounds()
+
         for _ in range(self.iteration):
             self.solve_iteration()
 
-        if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
-            self.reorder_particles()
+        if self.use_morton_code:
+            if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
+                self.reorder_particles()
 
         self.n_loop[None] = 0
 
@@ -781,8 +804,6 @@ class MpmPBDSolver:
 
     @ti.kernel
     def apply_interia(self, interia_force: ti.types.vector(3, float)):
-        for p in range(self.n_particles[None]):
-            if self.material[p] == 2:
-                self.dis[p] += interia_force
+        self.interia_force[None] = interia_force
 
     # endregion

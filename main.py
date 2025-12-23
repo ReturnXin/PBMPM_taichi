@@ -1,10 +1,10 @@
 import numpy as np
 import taichi as ti
-import utils_renderer
+import time
 
 from mpm_pbd import MpmPBDSolver
 
-ti.init(arch=ti.gpu, kernel_profiler=True)
+ti.init(arch=ti.cuda, kernel_profiler=True)
 
 n_grid, steps, dt = 32, 25, 4e-4
 
@@ -17,6 +17,52 @@ scene = ti.ui.Scene()
 camera = ti.ui.Camera()
 
 
+# region === process input function ===
+last_mouse_x = 0.0
+last_mouse_y = 0.0
+
+
+def process_mouse_action(mpm, shake_strength):
+    global last_mouse_x
+    global last_mouse_y
+    mouse_x, mouse_y = window.get_cursor_pos()
+    if window.is_pressed(ti.ui.LMB):
+        dx = mouse_x - last_mouse_x
+        dy = mouse_y - last_mouse_y
+        interia = ti.Vector([0.0, 0.0, 0.0])
+        if abs(dx) > 0.001 and abs(dy) > 0.001:
+            interia = ti.Vector([dx * shake_strength, 0.0, -dy * shake_strength])
+        mpm.apply_interia(interia)
+        last_mouse_x = mouse_x
+        last_mouse_y = mouse_y
+
+
+def process_key_action(mpm, move_speed, hide_obstacles):
+    if window.is_pressed(ti.ui.SPACE):
+        is_add_fluid = not is_add_fluid
+
+    dx, dy, dz = 0.0, 0.0, 0.0
+    if window.is_pressed("i"):
+        dz -= move_speed
+    if window.is_pressed("k"):
+        dz += move_speed
+    if window.is_pressed("j"):
+        dx -= move_speed
+    if window.is_pressed("l"):
+        dx += move_speed
+    if window.is_pressed("u"):
+        dy += move_speed
+    if window.is_pressed("o"):
+        dy -= move_speed
+    if dx != 0 or dy != 0 or dz != 0:
+        mpm.move_obstacle(0, [dx, dy, dz])  # 移动索引为0的障碍物
+        if not hide_obstacles:
+            mpm.update_mesh_vertices()  # 更新 Mesh
+
+
+# endregion
+
+
 def main():
     mpm = MpmPBDSolver()
     # mpm.generate_lines_vertex()
@@ -25,8 +71,6 @@ def main():
     camera.lookat(0.5, 0.3, 0.5)
 
     # region === Parameters ===
-    last_mouse_x = 0.0
-    last_mouse_y = 0.0
     shake_strength = 0.01
     is_add_fluid = False
     move_speed = 0.01
@@ -67,42 +111,15 @@ def main():
     mpm.init(hide_obstacles)
     scene.set_camera(camera)
     # endregion
-
+    start_frame = 450
+    end_frame = 500
+    sum_fps = 0
     while window.running:
         # camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
 
         # region === process input ===
-        mouse_x, mouse_y = window.get_cursor_pos()
-        if window.is_pressed(ti.ui.LMB):
-            dx = mouse_x - last_mouse_x
-            dy = mouse_y - last_mouse_y
-            if abs(dx) > 0.001:
-                interia = ti.Vector([dx * shake_strength, 0.0, -dy * shake_strength])
-                mpm.apply_interia(interia)
-            last_mouse_x = mouse_x
-            last_mouse_y = mouse_y
-
-        if window.is_pressed(ti.ui.SPACE):
-            is_add_fluid = not is_add_fluid
-
-        dx, dy, dz = 0.0, 0.0, 0.0
-        if window.is_pressed("i"):
-            dz -= move_speed
-        if window.is_pressed("k"):
-            dz += move_speed
-        if window.is_pressed("j"):
-            dx -= move_speed
-        if window.is_pressed("l"):
-            dx += move_speed
-        if window.is_pressed("u"):
-            dy += move_speed
-        if window.is_pressed("o"):
-            dy -= move_speed
-
-        if dx != 0 or dy != 0 or dz != 0:
-            mpm.move_obstacle(0, [dx, dy, dz])  # 移动索引为0的障碍物
-            if not hide_obstacles:
-                mpm.update_mesh_vertices()  # 更新 Mesh
+        process_mouse_action(mpm, shake_strength)
+        process_key_action(mpm, move_speed, hide_obstacles)
         # endregion
 
         # region === Render Scene ===
@@ -120,6 +137,7 @@ def main():
         # region === Print Information ===
         gui.text(f"min:({mpm.grid_min[0]},{mpm.grid_min[1]},{mpm.grid_min[2]})")
         gui.text(f"max:({mpm.grid_max[0]},{mpm.grid_max[1]},{mpm.grid_max[2]})")
+        gui.text(f"interia_force:{mpm.interia_force[None].norm()}")
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
@@ -128,12 +146,31 @@ def main():
         window.show()
         ti.profiler.clear_kernel_profiler_info()
 
+        # region === Profiler ===
+        current_f = mpm.fps_count[None]
+
+        if current_f == start_frame:
+            ti.sync()
+            start_time = time.time()
+            print(f">>> Start profiling from frame {start_frame}...")
+
+        ti.profiler.clear_kernel_profiler_info()
         mpm.substep()
 
-        if mpm.fps_count[None] == 500:
+        if current_f == end_frame:
+            ti.sync()
+            end_time = time.time()
+
+            total_time = end_time - start_time
+            num_frames = end_frame - start_frame + 1
+            avg_fps = num_frames / total_time
+
             print(f"===== Profiling Report (Sort Stage: {mpm.sort_stage}) =====")
             ti.profiler.print_kernel_profiler_info(mode="trace")
+            print(f"Total time for {num_frames} frames: {total_time:.4f} s")
+            print(f"Average FPS: {avg_fps:.2f}")
             break
+        # endregion
 
 
 if __name__ == "__main__":
