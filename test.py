@@ -103,6 +103,7 @@ class MpmPBDSolver:
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
         # ===Morton Code
+        self.use_morton_code = True
         self.sort_stage = 0
         self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
@@ -117,7 +118,7 @@ class MpmPBDSolver:
         self.temp_radius = ti.field(dtype=ti.f32, shape=self.max_particles)
 
         # ===Dynamic Bound
-        self.dynamic_grid = False
+        self.use_dynamic_grid = False
         self.grid_min = ti.field(dtype=ti.i32, shape=self.dim)
         self.grid_max = ti.field(dtype=ti.i32, shape=self.dim)
 
@@ -431,15 +432,29 @@ class MpmPBDSolver:
     # region === MPM ===
     @ti.kernel
     def compute_active_bounds(self):
-        for i in ti.static(range(3)):
-            self.grid_min[i] = 2147483647
-            self.grid_max[i] = -2147483648
-
         for p in range(self.n_particles[None]):
             base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
             for i in ti.static(range(3)):
                 ti.atomic_min(self.grid_min[i], base_pos[i])
                 ti.atomic_max(self.grid_max[i], base_pos[i])
+
+    @ti.func
+    def get_active_bounds(self):
+        min_x = 0
+        max_x = self.n_grid
+        min_y = 0
+        max_y = self.n_grid
+        min_z = 0
+        max_z = self.n_grid
+        if self.use_dynamic_grid:
+            padding = 3
+            min_x = ti.max(0, self.grid_min[0] - padding)
+            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
+            min_y = ti.max(0, self.grid_min[1] - padding)
+            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
+            min_z = ti.max(0, self.grid_min[2] - padding)
+            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
+        return min_x, max_x, min_y, max_y, min_z, max_z
 
     @ti.func
     def solve_constraint(self, p):
@@ -498,6 +513,13 @@ class MpmPBDSolver:
 
     @ti.func
     def P2G(self, p):
+        n = self.n_particles[None]
+        if self.use_morton_code:
+            multiplier = 1000003
+            p = (p * multiplier) % n
+            p = (p + (p % 8) * (n // 8)) % n
+        else:
+            p = p
         Xp = self.x[p] / self.dx
         base = int(Xp - 0.5)  # 向下取整
         fx = Xp - base
@@ -510,8 +532,7 @@ class MpmPBDSolver:
         for offset in ti.static(ti.grouped(ti.ndrange(*self.neighbour))):
             weight = 1.0
             dpos = (offset - fx) * self.dx
-            for i in ti.static(range(self.dim)):
-                weight *= w[offset[i]][i]
+            weight *= w[offset[0]][0] * w[offset[1]][1] * w[offset[2]][2]
             momentum = weight * (self.dis[p] + self.D[p] @ dpos)
             self.grid_dis[base + offset] += momentum
             self.grid_m[base + offset] += weight
@@ -677,6 +698,16 @@ class MpmPBDSolver:
             if self.x[p][d] > 1:
                 self.x[p][d] = 1
 
+        # 动态网格
+        if self.use_dynamic_grid:
+            for i in ti.static(range(3)):
+                self.grid_min[i] = 2147483647
+                self.grid_max[i] = -2147483648
+            base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
+            for i in ti.static(range(3)):
+                ti.atomic_min(self.grid_min[i], base_pos[i])
+                ti.atomic_max(self.grid_max[i], base_pos[i])
+
     @ti.kernel
     def solve_iteration(self):
         self.n_loop[None] += 1
@@ -688,14 +719,8 @@ class MpmPBDSolver:
         max_y = self.n_grid
         min_z = 0
         max_z = self.n_grid
-        if self.dynamic_grid:
-            padding = 3
-            min_x = ti.max(0, self.grid_min[0] - padding)
-            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
-            min_y = ti.max(0, self.grid_min[1] - padding)
-            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
-            min_z = ti.max(0, self.grid_min[2] - padding)
-            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
+        if self.use_dynamic_grid:
+            min_x, max_x, min_y, max_y, min_z, max_z = self.get_active_bounds()
 
         # ==end==
 
@@ -719,14 +744,14 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
-        if self.dynamic_grid:
+        if self.use_dynamic_grid:
             self.compute_active_bounds()
         for _ in range(self.iteration):
             self.solve_iteration()
             self.compute_average_height()
-
-        if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
-            self.reorder_particles()
+        if self.use_morton_code:
+            if self.fps_count[None] % 400 == 0 and self.sort_stage == 0:
+                self.reorder_particles()
 
         self.n_loop[None] = 0
 
@@ -785,5 +810,8 @@ class MpmPBDSolver:
         for p in range(self.n_particles[None]):
             if self.material[p] == 0:
                 self.dis[p] += interia_force
+
+    def reset(self):
+        pass
 
     # endregion

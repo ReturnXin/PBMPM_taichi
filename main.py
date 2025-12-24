@@ -50,6 +50,7 @@ def setup_scene(mpm):
     #     radius=0.006,
     # )
     mpm.init(hide_obstacles)
+    time.sleep(1)
 
 
 # region === process input function ===
@@ -111,22 +112,30 @@ def main():
     # mpm.add_box_obstacles(center=[0.5, 0.125, 0.5], size=[0.25, 0.25, 0.25], color=[0.6, 0.4, 0.8])
     scene.set_camera(camera)
     # endregion
-    start_frame = 450
-    end_frame = 500
+    start_frame = 50
+    end_frame = 200
 
+    use_optimization = True
+    if use_optimization:
+        mpm.use_morton_code = True
+        mpm.use_dynamic_grid = False
     setup_scene(mpm)
+
+    r_key_pressed = False
+    test_count = 0
     while window.running:
         # camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
 
         # region === process input ===
         process_mouse_action(mpm, shake_strength)
         process_key_action(mpm, move_speed, hide_obstacles)
-        for e in window.get_events(ti.ui.PRESS):
-            if e.key == "r":
-                print(">>> Resetting Scene...")
+        if window.is_pressed("r"):
+            if not r_key_pressed:
                 setup_scene(mpm)
+                r_key_pressed = True
+        else:
+            r_key_pressed = False
         # endregion
-
         # region === Render Scene ===
         scene.point_light(pos=(0, 1, 2), color=(1, 1, 1))
         if is_add_fluid:
@@ -142,7 +151,6 @@ def main():
         # region === Print Information ===
         gui.text(f"min:({mpm.grid_min[0]},{mpm.grid_min[1]},{mpm.grid_min[2]})")
         gui.text(f"max:({mpm.grid_max[0]},{mpm.grid_max[1]},{mpm.grid_max[2]})")
-        gui.text(f"interia_force:{mpm.interia_force[None].norm()}")
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
@@ -163,6 +171,7 @@ def main():
         mpm.substep()
 
         if current_f == end_frame:
+            test_count += 1
             ti.sync()
             end_time = time.time()
 
@@ -174,6 +183,9 @@ def main():
             ti.profiler.print_kernel_profiler_info(mode="trace")
             print(f"Total time for {num_frames} frames: {total_time:.4f} s")
             print(f"Average FPS: {avg_fps:.2f}")
+            # if test_count == 1:
+            #     setup_scene(mpm, is_test=True)
+
             # break
         # endregion
 
