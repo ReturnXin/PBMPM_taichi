@@ -7,7 +7,12 @@ from mpm_pbd import MpmPBDSolver
 ti.init(arch=ti.cuda, kernel_profiler=True)
 
 n_grid, steps, dt = 32, 25, 4e-4
-
+# region === Parameters ===
+shake_strength = 0.0
+is_add_fluid = False
+move_speed = 0.01
+hide_obstacles = True
+# endregion
 
 window = ti.ui.Window("MPM3D", (720, 720), vsync=True)
 gui = window.get_gui()
@@ -15,6 +20,36 @@ canvas = window.get_canvas()
 canvas.set_background_color((0.1, 0.1, 0.1))
 scene = ti.ui.Scene()
 camera = ti.ui.Camera()
+
+
+def setup_scene(mpm):
+    mpm.reset()
+    mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
+    mpm.add_cube(
+        particle_num=2**15,
+        center=[0.4, 0.5, 0.4],
+        cube_size=[0.5, 0.5, 0.5],
+        color=[0.1, 0.4, 0.8],
+        material=0,
+        radius=0.005,
+    )
+    # mpm.add_cube(
+    #     particle_num=2**13,
+    #     center=[0.4, 0.5, 0.4],
+    #     cube_size=[0.3, 0.3, 0.3],
+    #     color=[0.95, 0.4, 0.4],
+    #     material=1,
+    #     radius=0.008,
+    # )
+    # mpm.add_cube(
+    #     particle_num=2**13,
+    #     center=[0.4, 0.25, 0.4],
+    #     cube_size=[0.5, 0.5, 0.5],
+    #     color=[0.85, 0.75, 0.55],
+    #     material=2,
+    #     radius=0.006,
+    # )
+    mpm.init(hide_obstacles)
 
 
 # region === process input function ===
@@ -38,8 +73,8 @@ def process_mouse_action(mpm, shake_strength):
 
 
 def process_key_action(mpm, move_speed, hide_obstacles):
-    if window.is_pressed(ti.ui.SPACE):
-        is_add_fluid = not is_add_fluid
+    # if window.is_pressed(ti.ui.SPACE):
+    #     is_add_fluid = not is_add_fluid
 
     dx, dy, dz = 0.0, 0.0, 0.0
     if window.is_pressed("i"):
@@ -70,56 +105,26 @@ def main():
     camera.position(0.5, 1.0, 2.0)
     camera.lookat(0.5, 0.3, 0.5)
 
-    # region === Parameters ===
-    shake_strength = 0.01
-    is_add_fluid = False
-    move_speed = 0.01
-    hide_obstacles = True
-    # endregion
-
     # region === scene setting ===
+
     scene.ambient_light((0.5, 0.5, 0.5))
     # mpm.add_box_obstacles(center=[0.5, 0.125, 0.5], size=[0.25, 0.25, 0.25], color=[0.6, 0.4, 0.8])
-    mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
-    mpm.add_cube(
-        particle_num=2**16,
-        center=[0.4, 0.5, 0.4],
-        cube_size=[0.5, 0.5, 0.5],
-        color=[0.1, 0.4, 0.8],
-        material=0,
-        radius=0.005,
-    )
-
-    # mpm.add_cube(
-    #     particle_num=2**13,
-    #     center=[0.4, 0.5, 0.4],
-    #     cube_size=[0.3, 0.3, 0.3],
-    #     color=[0.95, 0.4, 0.4],
-    #     material=1,
-    #     radius=0.008,
-    # )
-
-    # mpm.add_cube(
-    #     particle_num=2**13,
-    #     center=[0.4, 0.25, 0.4],
-    #     cube_size=[0.5, 0.5, 0.5],
-    #     color=[0.85, 0.75, 0.55],
-    #     material=2,
-    #     radius=0.006,
-    # )
-
-    mpm.init(hide_obstacles)
     scene.set_camera(camera)
     # endregion
     start_frame = 450
     end_frame = 500
-    sum_fps = 0
+
+    setup_scene(mpm)
     while window.running:
         # camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
 
         # region === process input ===
         process_mouse_action(mpm, shake_strength)
         process_key_action(mpm, move_speed, hide_obstacles)
+        for e in window.get_events(ti.ui.PRESS):
+            if e.key == "r":
+                print(">>> Resetting Scene...")
+                setup_scene(mpm)
         # endregion
 
         # region === Render Scene ===
@@ -169,7 +174,7 @@ def main():
             ti.profiler.print_kernel_profiler_info(mode="trace")
             print(f"Total time for {num_frames} frames: {total_time:.4f} s")
             print(f"Average FPS: {avg_fps:.2f}")
-            break
+            # break
         # endregion
 
 

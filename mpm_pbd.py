@@ -50,7 +50,7 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 10
-        self.iteration = 5
+        self.iteration = 7
         self.average_height = ti.field(dtype=ti.f32, shape=())
         self.fps_count = ti.field(dtype=ti.i32, shape=())
         self.interia_force = ti.Vector.field(self.dim, dtype=ti.f32, shape=())
@@ -805,5 +805,29 @@ class MpmPBDSolver:
     @ti.kernel
     def apply_interia(self, interia_force: ti.types.vector(3, float)):
         self.interia_force[None] = interia_force
+
+    def reset(self):
+        self.n_particles[None] = 0
+        self.fps_count[None] = 0
+        self.n_loop[None] = 0
+        self.average_height[None] = 0.0
+        self.interia_force[None] = [0.0, 0.0, 0.0]
+
+        self.grid_m.fill(0)
+        self.grid_dis.fill(0)
+        self.grid_vol.fill(0)
+
+        self.x.fill(0)
+        self.dis.fill(0)
+        self.D.fill(0)
+        self.L.fill(1.0)  # 密度默认为 1
+        self.log_JP.fill(0)
+
+        self.reset_F_to_identity()
+
+    @ti.kernel
+    def reset_F_to_identity(self):
+        for i in range(self.max_particles):
+            self.F[i] = ti.Matrix.identity(ti.f32, self.dim)
 
     # endregion
