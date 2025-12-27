@@ -56,7 +56,7 @@ class MpmPBDSolver:
         self.interia_force = ti.Vector.field(self.dim, dtype=ti.f32, shape=())
 
         # ===Particle
-        self.max_particles = 200000
+        self.max_particles = 300000
         self.n_particles = ti.field(dtype=ti.i32, shape=())
         self.n_particles[None] = 0
         self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)  # Position
@@ -431,14 +431,6 @@ class MpmPBDSolver:
     # endregion
 
     # region === MPM ===
-    @ti.kernel
-    def compute_active_bounds(self):
-        for p in range(self.n_particles[None]):
-            base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
-            for i in ti.static(range(3)):
-                ti.atomic_min(self.grid_min[i], base_pos[i])
-                ti.atomic_max(self.grid_max[i], base_pos[i])
-
     @ti.func
     def get_active_bounds(self):
         min_x = 0
@@ -637,7 +629,7 @@ class MpmPBDSolver:
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
             self.L[p] = ti.max(self.L[p], 0.05)
-            self.compute_water_color(p, 0)
+            self.compute_water_color(p, 1)
 
         elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
@@ -745,10 +737,8 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
-        if self.use_dynamic_grid:
-            self.compute_active_bounds()
         if self.use_morton_code:
-            if self.fps_count[None] == 0:
+            if self.fps_count[None] == 49:
                 self.reorder_particles()
         for _ in range(self.iteration):
             self.solve_iteration()

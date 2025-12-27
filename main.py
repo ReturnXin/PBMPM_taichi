@@ -26,7 +26,7 @@ def setup_scene(mpm):
     mpm.reset()
     mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.25, color=[0.6, 0.4, 0.8])
     mpm.add_cube(
-        particle_num=2**15,
+        particle_num=2**16,
         center=[0.4, 0.5, 0.4],
         cube_size=[0.5, 0.5, 0.5],
         color=[0.1, 0.4, 0.8],
@@ -115,9 +115,12 @@ def main():
     start_frame = 50
     end_frame = 200
 
-    use_optimization = True
+    use_optimization = False
     if use_optimization:
         mpm.use_morton_code = True
+        mpm.use_dynamic_grid = False
+    else:
+        mpm.use_morton_code = False
         mpm.use_dynamic_grid = False
     setup_scene(mpm)
 
