@@ -313,35 +313,108 @@ class MpmPBDSolver:
                 self.particle_sort_keys[p] = 2147483647
             self.particle_sort_indices[p] = p
 
+    @ti.func
+    def copy_particle_to_temp(self, i):
+        old_idx = self.particle_sort_indices[i]
+        self.temp_x[i] = self.x[old_idx]
+        self.temp_dis[i] = self.dis[old_idx]
+        self.temp_D[i] = self.D[old_idx]
+        self.temp_F[i] = self.F[old_idx]
+        self.temp_L[i] = self.L[old_idx]
+        self.temp_log_JP[i] = self.log_JP[old_idx]
+        self.temp_color[i] = self.color[old_idx]
+        self.temp_material[i] = self.material[old_idx]
+        self.temp_radius[i] = self.radius[old_idx]
+
+    @ti.func
+    def copy_temp_to_particle(self, i):
+        self.x[i] = self.temp_x[i]
+        self.dis[i] = self.temp_dis[i]
+        self.D[i] = self.temp_D[i]
+        self.F[i] = self.temp_F[i]
+        self.L[i] = self.temp_L[i]
+        self.log_JP[i] = self.temp_log_JP[i]
+        self.color[i] = self.temp_color[i]
+        self.material[i] = self.temp_material[i]
+        self.radius[i] = self.temp_radius[i]
+
     @ti.kernel
     def sort_particles_step2(self):
         for i in range(self.n_particles[None]):
-            old_idx = self.particle_sort_indices[i]
-            self.temp_x[i] = self.x[old_idx]
-            self.temp_dis[i] = self.dis[old_idx]
-            self.temp_D[i] = self.D[old_idx]
-            self.temp_F[i] = self.F[old_idx]
-            self.temp_L[i] = self.L[old_idx]
-            self.temp_log_JP[i] = self.log_JP[old_idx]
-            self.temp_color[i] = self.color[old_idx]
-            self.temp_material[i] = self.material[old_idx]
-            self.temp_radius[i] = self.radius[old_idx]
+            self.copy_particle_to_temp(i)
 
         for i in range(self.n_particles[None]):
-            self.x[i] = self.temp_x[i]
-            self.dis[i] = self.temp_dis[i]
-            self.D[i] = self.temp_D[i]
-            self.F[i] = self.temp_F[i]
-            self.L[i] = self.temp_L[i]
-            self.log_JP[i] = self.temp_log_JP[i]
-            self.color[i] = self.temp_color[i]
-            self.material[i] = self.temp_material[i]
-            self.radius[i] = self.temp_radius[i]
+            self.copy_temp_to_particle(i)
 
     def reorder_particles(self):
         self.sort_particles_step1()
         ti.algorithms.parallel_sort(self.particle_sort_keys, self.particle_sort_indices)
         self.sort_particles_step2()
+
+    @ti.func
+    def swap_particle_data(self, i, j):
+        # tmp_x = self.x[i]
+        # self.x[i] = self.x[j]
+        # self.x[j] = tmp_x
+        self.x[i], self.x[j] = (self.x[j], self.x[i])
+
+        tmp_dis = self.dis[i]
+        self.dis[i] = self.dis[j]
+        self.dis[j] = tmp_dis
+
+        tmp_key = self.particle_sort_keys[i]
+        self.particle_sort_keys[i] = self.particle_sort_keys[j]
+        self.particle_sort_keys[j] = tmp_key
+
+        tmp_F = self.F[i]
+        self.F[i] = self.F[j]
+        self.F[j] = tmp_F
+
+        tmp_D = self.D[i]
+        self.D[i] = self.D[j]
+        self.D[j] = tmp_D
+
+        tmp_L = self.L[i]
+        self.L[i] = self.L[j]
+        self.L[j] = tmp_L
+
+        tmp_log = self.log_JP[i]
+        self.log_JP[i] = self.log_JP[j]
+        self.log_JP[j] = tmp_log
+
+        tmp_c = self.color[i]
+        self.color[i] = self.color[j]
+        self.color[j] = tmp_c
+
+        tmp_m = self.material[i]
+        self.material[i] = self.material[j]
+        self.material[j] = tmp_m
+
+        tmp_r = self.radius[i]
+        self.radius[i] = self.radius[j]
+        self.radius[j] = tmp_r
+
+    @ti.func
+    def swap_particle_key(self, i, j):
+        self.particle_sort_indices[i], self.particle_sort_indices[j] = (
+            self.particle_sort_indices[j],
+            self.particle_sort_indices[i],
+        )
+        self.particle_sort_keys[i], self.particle_sort_keys[j] = (
+            self.particle_sort_keys[j],
+            self.particle_sort_keys[i],
+        )
+
+    @ti.func
+    def incremental_sort_step(self, i: int, phase: int):
+        if i % 2 == phase:
+            j = i + 1
+            if j < self.n_particles[None]:
+                key_i = self.particle_sort_keys[i]
+                key_j = self.particle_sort_keys[j]
+
+                if key_i > key_j:
+                    self.swap_particle_data(i, j)
 
     # endregion
 
@@ -701,9 +774,12 @@ class MpmPBDSolver:
                 ti.atomic_min(self.grid_min[i], base_pos[i])
                 ti.atomic_max(self.grid_max[i], base_pos[i])
 
+        # 获取Morton Code
+        if self.use_morton_code:
+            self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
+
     @ti.kernel
-    def solve_iteration(self):
-        self.n_loop[None] += 1
+    def solve_iteration(self, i: ti.int32):
 
         # ===计算活跃包围盒===
         min_x = 0
@@ -724,6 +800,12 @@ class MpmPBDSolver:
             self.G2P(p)
             if self.n_loop[None] == self.iteration - 1:
                 self.update_particles(p)
+            else:
+                if self.use_morton_code:
+                    self.incremental_sort_step(p, i % 2)
+                    pass
+            val = p / self.n_particles[None]
+            self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
             self.solve_constraint(p)
 
         for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
@@ -735,14 +817,19 @@ class MpmPBDSolver:
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
+        self.n_loop[None] += 1
+
     def substep(self):
         self.fps_count[None] += 1
         if self.use_morton_code:
-            if self.fps_count[None] == 49:
+            if self.fps_count[None] == 1:
                 self.reorder_particles()
-        for _ in range(self.iteration):
-            self.solve_iteration()
+
+        for i in range(self.iteration):
+            self.solve_iteration(i)
             self.compute_average_height()
+
+        # self.sort_particles_step2()
 
         self.n_loop[None] = 0
 

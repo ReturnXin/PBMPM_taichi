@@ -115,7 +115,7 @@ def main():
     start_frame = 50
     end_frame = 200
 
-    use_optimization = False
+    use_optimization = True
     if use_optimization:
         mpm.use_morton_code = True
         mpm.use_dynamic_grid = False
