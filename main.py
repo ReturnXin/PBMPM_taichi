@@ -126,6 +126,7 @@ def main():
 
     r_key_pressed = False
     test_count = 0
+    # mpm.substep()
     while window.running:
         # camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
 
