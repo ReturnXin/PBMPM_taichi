@@ -34,7 +34,7 @@ def setup_scene(mpm):
         radius=0.005,
     )
     # mpm.add_cube(
-    #     particle_num=2**13,
+    #     particle_num=2**16,
     #     center=[0.4, 0.5, 0.4],
     #     cube_size=[0.3, 0.3, 0.3],
     #     color=[0.95, 0.4, 0.4],
@@ -183,7 +183,7 @@ def main():
             num_frames = end_frame - start_frame + 1
             avg_fps = num_frames / total_time
 
-            print(f"===== Profiling Report (Sort Stage: {mpm.sort_stage}) =====")
+            print(f"===== Profiling Report =====")
             ti.profiler.print_kernel_profiler_info(mode="trace")
             print(f"Total time for {num_frames} frames: {total_time:.4f} s")
             print(f"Average FPS: {avg_fps:.2f}")

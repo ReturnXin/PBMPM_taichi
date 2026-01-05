@@ -13,7 +13,8 @@ def expand_bits(v):
 
 @ti.func
 def get_morton_code(xp, dx, n_grid):
-    grid_idx = ti.cast(xp / dx + 1e-5, ti.i32)
+    scale = 1
+    grid_idx = ti.cast(xp / (dx * scale) + 1e-5, ti.i32)
     x = ti.max(0, ti.min(grid_idx[0], n_grid - 1))
     y = ti.max(0, ti.min(grid_idx[1], n_grid - 1))
     z = ti.max(0, ti.min(grid_idx[2], n_grid - 1))

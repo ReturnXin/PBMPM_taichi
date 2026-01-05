@@ -43,7 +43,6 @@ class MpmPBDSolver:
         self.neighbour = (3,) * self.dim
 
         self.n_loop = ti.field(dtype=ti.i32, shape=())
-        self.n_loop[None] = 0
 
         self.p_rho = 1
         self.p_vol = 1 / 2**3
@@ -105,7 +104,8 @@ class MpmPBDSolver:
 
         # ===Morton Code
         self.use_morton_code = True
-        self.sort_stage = 0
+        self.shrink_factor = 1.8
+        self.gaps = ti.field(dtype=ti.i32, shape=self.iteration)
         self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.temp_x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)
@@ -337,6 +337,7 @@ class MpmPBDSolver:
         self.color[i] = self.temp_color[i]
         self.material[i] = self.temp_material[i]
         self.radius[i] = self.temp_radius[i]
+        self.particle_sort_indices[i] = i
 
     @ti.kernel
     def sort_copy_data(self):
@@ -358,15 +359,27 @@ class MpmPBDSolver:
         )
 
     @ti.func
-    def incremental_sort_step(self, i: int, phase: int):
-        if i % 2 == phase:
-            j = i + 1
-            if j < self.n_particles[None]:
-                key_i = self.particle_sort_keys[i]
-                key_j = self.particle_sort_keys[j]
-
+    def incremental_sort_step(self, p: int, i: int, gap: int):
+        block_idx = p // gap
+        phase = i % 2
+        if block_idx % 2 == phase:
+            q = p + gap
+            if q < self.n_particles[None]:
+                key_i = self.particle_sort_keys[p]
+                key_j = self.particle_sort_keys[q]
                 if key_i > key_j:
-                    self.swap_particle_key(i, j)
+                    self.swap_particle_key(p, q)
+
+    def generate_gaps(self):
+        shrink_factor = self.shrink_factor
+        temp_gaps = []
+        current_gap = 1
+        for _ in range(self.iteration):
+            temp_gaps.append(int(current_gap))
+            current_gap = max(current_gap * shrink_factor, current_gap + 1)
+        temp_gaps = temp_gaps[::-1]
+        for i in range(len(temp_gaps)):
+            self.gaps[i] = temp_gaps[i]
 
     # endregion
 
@@ -437,6 +450,9 @@ class MpmPBDSolver:
         self.init_material_params()
         if not hide_obstacles:
             self.prepare_render_data()
+        if self.use_morton_code:
+            self.generate_gaps()
+        print(self.gaps)
 
         print(self.n_particles[None])
 
@@ -717,7 +733,7 @@ class MpmPBDSolver:
                 self.x[p][d] = 1
 
     @ti.kernel
-    def solve_iteration(self, i: ti.int32):
+    def solve_iteration(self, i: ti.int32, gap: ti.int32):
 
         # ===计算活跃包围盒===
         min_x = 0
@@ -735,12 +751,11 @@ class MpmPBDSolver:
 
         for p in range(self.n_particles[None]):
             self.G2P(p)
-            if self.n_loop[None] == 0:
+            if i == 0:
                 if self.use_morton_code:
                     self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
-                    self.particle_sort_indices[p] = p
-                    self.incremental_sort_step(p, i % 2)
-            if self.n_loop[None] == self.iteration - 1:
+                    # self.incremental_sort_step(p, i, gap)
+            if i == self.iteration - 1:
                 self.update_particles(p)
                 # 更新颜色
                 val = p / self.n_particles[None]
@@ -756,7 +771,7 @@ class MpmPBDSolver:
                         ti.atomic_max(self.grid_max[i], base_pos[i])
             else:
                 if self.use_morton_code:
-                    self.incremental_sort_step(p, i % 2)
+                    self.incremental_sort_step(p, i, gap)
             self.solve_constraint(p)
 
         for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
@@ -768,8 +783,6 @@ class MpmPBDSolver:
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
-        self.n_loop[None] += 1
-
     def substep(self):
         self.fps_count[None] += 1
         if self.use_morton_code:
@@ -779,13 +792,13 @@ class MpmPBDSolver:
                 self.sort_copy_data()
 
         for i in range(self.iteration):
-            self.solve_iteration(i)
+            gap = self.gaps[i]
+            self.solve_iteration(i, gap)
             # self.compute_average_height()
 
         if self.use_morton_code:
             self.sort_copy_data()
             pass
-        self.n_loop[None] = 0
 
     # endregion
 
@@ -804,7 +817,6 @@ class MpmPBDSolver:
         average_L /= self.n_particles[None]
         print(
             "=====================",
-            self.n_loop[None],
             ":",
             average_alpha,
             average_D_trace,
@@ -844,7 +856,6 @@ class MpmPBDSolver:
     def reset(self):
         self.n_particles[None] = 0
         self.fps_count[None] = 0
-        self.n_loop[None] = 0
         self.average_height[None] = 0.0
         self.interia_force[None] = [0.0, 0.0, 0.0]
 
