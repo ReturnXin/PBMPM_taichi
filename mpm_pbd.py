@@ -104,7 +104,7 @@ class MpmPBDSolver:
 
         # ===Morton Code
         self.use_morton_code = True
-        self.shrink_factor = 1.8
+        self.shrink_factor = 3.8
         self.gaps = ti.field(dtype=ti.i32, shape=self.iteration)
         self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
@@ -361,7 +361,7 @@ class MpmPBDSolver:
     @ti.func
     def incremental_sort_step(self, p: int, i: int, gap: int):
         block_idx = p // gap
-        phase = i % 2
+        phase = self.fps_count[None] % 2
         if block_idx % 2 == phase:
             q = p + gap
             if q < self.n_particles[None]:
@@ -754,7 +754,6 @@ class MpmPBDSolver:
             if i == 0:
                 if self.use_morton_code:
                     self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
-                    # self.incremental_sort_step(p, i, gap)
             if i == self.iteration - 1:
                 self.update_particles(p)
                 # 更新颜色
@@ -769,9 +768,6 @@ class MpmPBDSolver:
                     for i in ti.static(range(3)):
                         ti.atomic_min(self.grid_min[i], base_pos[i])
                         ti.atomic_max(self.grid_max[i], base_pos[i])
-            else:
-                if self.use_morton_code:
-                    self.incremental_sort_step(p, i, gap)
             self.solve_constraint(p)
 
         for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
@@ -782,6 +778,10 @@ class MpmPBDSolver:
         ti.loop_config(parallelize=8, block_dim=128)
         for p in range(self.n_particles[None]):
             self.P2G(p)
+
+        for p in range(self.n_particles[None]):
+            if self.use_morton_code:
+                self.incremental_sort_step(p, i, gap)
 
     def substep(self):
         self.fps_count[None] += 1
