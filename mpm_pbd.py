@@ -758,6 +758,7 @@ class MpmPBDSolver:
                 self.update_particles(p)
                 # 更新颜色
                 val = p / self.n_particles[None]
+                # self.color[p] = ti.Vector([val, val, val])
                 self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
                 # 动态网格
                 if self.use_dynamic_grid:
