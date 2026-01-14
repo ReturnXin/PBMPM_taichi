@@ -340,7 +340,7 @@ class MpmPBDSolver:
         self.particle_sort_indices[i] = i
 
     @ti.kernel
-    def sort_copy_data(self):
+    def copy_data(self):
         for i in range(self.n_particles[None]):
             self.copy_particle_to_temp(i)
 
@@ -751,14 +751,10 @@ class MpmPBDSolver:
 
         for p in range(self.n_particles[None]):
             self.G2P(p)
-            if i == 0:
-                if self.use_morton_code:
-                    self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
             if i == self.iteration - 1:
                 self.update_particles(p)
                 # 更新颜色
                 val = p / self.n_particles[None]
-                # self.color[p] = ti.Vector([val, val, val])
                 self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
                 # 动态网格
                 if self.use_dynamic_grid:
@@ -782,6 +778,8 @@ class MpmPBDSolver:
 
         for p in range(self.n_particles[None]):
             if self.use_morton_code:
+                if i == 0:
+                    self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
                 self.incremental_sort_step(p, i, gap)
 
     def substep(self):
@@ -790,7 +788,7 @@ class MpmPBDSolver:
             if self.fps_count[None] == 1:
                 self.sort_init()
                 ti.algorithms.parallel_sort(self.particle_sort_keys, self.particle_sort_indices)
-                self.sort_copy_data()
+                self.copy_data()
 
         for i in range(self.iteration):
             gap = self.gaps[i]
@@ -798,7 +796,7 @@ class MpmPBDSolver:
             # self.compute_average_height()
 
         if self.use_morton_code:
-            self.sort_copy_data()
+            self.copy_data()
             pass
 
     # endregion

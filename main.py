@@ -1,6 +1,7 @@
 import numpy as np
-import taichi as ti
 import time
+import argparse
+import taichi as ti
 
 from mpm_pbd import MpmPBDSolver
 
@@ -99,7 +100,7 @@ def process_key_action(mpm, move_speed, hide_obstacles):
 # endregion
 
 
-def main():
+def main(args):
     mpm = MpmPBDSolver()
     # mpm.generate_lines_vertex()
 
@@ -115,7 +116,7 @@ def main():
     start_frame = 50
     end_frame = 200
 
-    use_optimization = True
+    use_optimization = args.opt
     if use_optimization:
         mpm.shrink_factor = 3.1
         mpm.use_morton_code = True
@@ -196,4 +197,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--opt", action="store_true")
+    args = parser.parse_args()
+    main(args)
