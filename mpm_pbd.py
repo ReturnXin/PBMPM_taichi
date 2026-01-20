@@ -49,7 +49,7 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 10
-        self.iteration = 8
+        self.iteration = 6
         self.average_height = ti.field(dtype=ti.f32, shape=())
         self.fps_count = ti.field(dtype=ti.i32, shape=())
         self.interia_force = ti.Vector.field(self.dim, dtype=ti.f32, shape=())
@@ -67,6 +67,7 @@ class MpmPBDSolver:
         self.F = ti.Matrix.field(
             self.dim, self.dim, dtype=ti.f32, shape=self.max_particles
         )  # Deformation Gradient
+        self.lambdas = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)
         self.log_JP = ti.field(dtype=ti.f32, shape=self.max_particles)
         self.color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
         self.radius = ti.field(dtype=ti.f32, shape=self.max_particles)
@@ -292,7 +293,7 @@ class MpmPBDSolver:
         self.mat_params[0].stiffness = 0.8
 
         # 1: Elastic
-        self.mat_params[1].beta = 0.5
+        self.mat_params[1].beta = 1.0
         self.mat_params[1].elastic_relaxation = 1.0
 
         # 2. Sand
@@ -521,7 +522,14 @@ class MpmPBDSolver:
             elastic_relaxation = self.mat_params[1].elastic_relaxation
             tgt = beta * A_shape + (1 - beta) * A_vol
             diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
-            self.D[p] += elastic_relaxation * diff
+            # XPBD
+            stiffness_E = 1000
+            alpha = 1.0 / (stiffness_E + 1e-6)
+            tilde_alpha = alpha / (self.dt**2)
+            delta_lambda = (diff - tilde_alpha * self.lambdas[p]) / (1.0 + tilde_alpha)
+
+            self.D[p] += delta_lambda
+            self.lambdas[p] += delta_lambda
 
         elif self.material[p] == 2:  # sand
             I = ti.Matrix.identity(ti.f32, self.dim)
@@ -631,7 +639,6 @@ class MpmPBDSolver:
 
         self.dis[p] = new_dis
         self.D[p] = new_D
-        # self.solve_constraints(p)
 
     @ti.kernel
     def compute_average_height(self):
@@ -754,8 +761,8 @@ class MpmPBDSolver:
             if i == self.iteration - 1:
                 self.update_particles(p)
                 # 更新颜色
-                val = p / self.n_particles[None]
-                self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
+                # val = p / self.n_particles[None]
+                # self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
                 # 动态网格
                 if self.use_dynamic_grid:
                     for i in ti.static(range(3)):
@@ -784,6 +791,7 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
+        self.lambdas.fill(0)
         if self.use_morton_code:
             if self.fps_count[None] == 1:
                 self.sort_init()
