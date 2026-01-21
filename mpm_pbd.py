@@ -2,6 +2,7 @@ import taichi as ti
 import numpy as np
 from utils_renderer import get_unit_cube_mesh, get_sphere_mesh
 from morton_code import get_morton_code
+from typing import Any
 
 MaterialParam = ti.types.struct(
     rho=ti.f32,
@@ -123,6 +124,9 @@ class MpmPBDSolver:
         self.use_dynamic_grid = False
         self.grid_min = ti.field(dtype=ti.i32, shape=self.dim)
         self.grid_max = ti.field(dtype=ti.i32, shape=self.dim)
+
+        # ===Debug
+        self.D_trace = ti.field(dtype=ti.f32, shape=())
 
     # region === Obstacles ===
 
@@ -293,7 +297,7 @@ class MpmPBDSolver:
         self.mat_params[0].stiffness = 0.8
 
         # 1: Elastic
-        self.mat_params[1].beta = 1.0
+        self.mat_params[1].beta = 0.5
         self.mat_params[1].elastic_relaxation = 1.0
 
         # 2. Sand
@@ -491,67 +495,82 @@ class MpmPBDSolver:
             max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
         return min_x, max_x, min_y, max_y, min_z, max_z
 
-    @ti.func
-    def solve_constraint(self, p):
-        if self.material[p] == 0:  # fluid
-            # (A) 黏度约束
-            deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
-            self.D[p] += self.mat_params[0].viscosity * 0.5 * deviatoric
+    @ti.kernel
+    def solve_constraint(self):
+        for p in range(self.n_particles[None]):
+            if self.material[p] == 0:  # fluid
+                # (A) 黏度约束
+                deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
+                self.D[p] += self.mat_params[0].viscosity * 0.5 * deviatoric
 
-            # (B) 体积/压力约束
-            current_trace = self.D[p].trace()
-            safe_L = ti.max(self.L[p], 0.1)
-            alpha = (1.0 / 3.0) * (1.0 / safe_L - current_trace - 1.0)
-            self.D[p] += self.mat_params[0].stiffness * alpha * ti.Matrix.identity(ti.f32, self.dim)
+                # (B) 体积/压力约束
+                current_trace = self.D[p].trace()
+                safe_L = ti.max(self.L[p], 0.1)
+                alpha = (1.0 / 3.0) * (1.0 / safe_L - current_trace - 1.0)
+                self.D[p] += self.mat_params[0].stiffness * alpha * ti.Matrix.identity(ti.f32, self.dim)
 
-        elif self.material[p] == 1:  # elastic
-            I = ti.Matrix.identity(ti.f32, self.dim)
-            F_star = (I + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(F_star)
-            new_sig = ti.Matrix.identity(ti.f32, self.dim)
-            for d in range(self.dim):
-                new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
-            F_star = U @ new_sig @ V.transpose()
-            A_shape = U @ V.transpose()
+            elif self.material[p] == 1:  # elastic
+                I = ti.Matrix.identity(ti.f32, self.dim)
+                F_star = (I + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(F_star)
+                new_sig = ti.Matrix.identity(ti.f32, self.dim)
+                for d in range(self.dim):
+                    new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
+                F_star = U @ new_sig @ V.transpose()
+                A_shape = U @ V.transpose()
 
-            det_F = F_star.determinant()
-            det_F_clamped = ti.max(0.1, ti.min(det_F, 1000))
-            A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
+                det_F = F_star.determinant()
+                det_F_clamped = ti.max(0.1, ti.min(det_F, 1000))
+                A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
 
-            beta = self.mat_params[1].beta
-            elastic_relaxation = self.mat_params[1].elastic_relaxation
-            tgt = beta * A_shape + (1 - beta) * A_vol
-            diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
-            # XPBD
-            stiffness_E = 1000
-            alpha = 1.0 / (stiffness_E + 1e-6)
-            tilde_alpha = alpha / (self.dt**2)
-            delta_lambda = (diff - tilde_alpha * self.lambdas[p]) / (1.0 + tilde_alpha)
+                # beta = self.mat_params[1].beta
+                beta = 1.0
+                elastic_relaxation = self.mat_params[1].elastic_relaxation
+                tgt = beta * A_shape + (1 - beta) * A_vol
 
-            self.D[p] += delta_lambda
-            self.lambdas[p] += delta_lambda
+                U_old, sig_old, V_old = ti.svd(self.F[p])
+                inv_sig = ti.Matrix.zero(ti.f32, self.dim, self.dim)
+                for d in range(self.dim):
+                    inv_sig[d, d] = 1.0 / ti.max(sig_old[d, d], 0.1)
+                F_inv = V_old @ inv_sig @ U_old.transpose()
 
-        elif self.material[p] == 2:  # sand
-            I = ti.Matrix.identity(ti.f32, self.dim)
-            F_star = (I + self.D[p]) @ self.F[p]
-            U, sig, V = ti.svd(F_star)
-            for d in range(self.dim):
-                sig[d, d] = ti.max(1.0, ti.min(sig[d, d], 1000))
-            A_shape = U @ sig @ V.transpose()
+                diff = (tgt @ F_inv - I) - self.D[p]
+                # XPBD
+                stiffness_E = 50000
+                alpha = 1.0 / (stiffness_E + 1e-6)
+                tilde_alpha = alpha / (self.dt**2)
+                delta_lambda = (diff - tilde_alpha * self.lambdas[p]) / (1.0 + tilde_alpha)
 
-            det_F = F_star.determinant()
-            det_F_clamped = ti.max(0.1, ti.min(det_F, 1.0))
-            A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
+                self.D[p] += delta_lambda
+                self.lambdas[p] += delta_lambda
 
-            beta = self.mat_params[2].beta
-            tgt = beta * A_shape + (1 - beta) * A_vol
-            diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
-            elastic_relaxtion = self.mat_params[1].elastic_relaxation
-            self.D[p] += elastic_relaxtion * diff
+                if p == 0:
+                    print(f"Target_yy={tgt[1,1]:.4f}, Current_F_yy={self.F[p][1,1]:.4f}")
+                    print(f"diff_yy={diff[1,1]:.4f}")
+                    print(f"tilde_alpha={tilde_alpha:.4f}")
+                    print(f"delta_lambda_yy={delta_lambda[1,1]}")
 
-            alpha_visc = 0.1
-            deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
-            self.D[p] += alpha_visc * 0.5 * deviatoric
+            elif self.material[p] == 2:  # sand
+                I = ti.Matrix.identity(ti.f32, self.dim)
+                F_star = (I + self.D[p]) @ self.F[p]
+                U, sig, V = ti.svd(F_star)
+                for d in range(self.dim):
+                    sig[d, d] = ti.max(1.0, ti.min(sig[d, d], 1000))
+                A_shape = U @ sig @ V.transpose()
+
+                det_F = F_star.determinant()
+                det_F_clamped = ti.max(0.1, ti.min(det_F, 1.0))
+                A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
+
+                beta = self.mat_params[2].beta
+                tgt = beta * A_shape + (1 - beta) * A_vol
+                diff = (tgt @ self.F[p].inverse() - I) - self.D[p]
+                elastic_relaxtion = self.mat_params[1].elastic_relaxation
+                self.D[p] += elastic_relaxtion * diff
+
+                alpha_visc = 0.1
+                deviatoric = -1.0 * (self.D[p] + self.D[p].transpose())
+                self.D[p] += alpha_visc * 0.5 * deviatoric
 
     @ti.func
     def P2G(self, p):
@@ -583,14 +602,18 @@ class MpmPBDSolver:
 
     @ti.func
     def update_grid(self, I):
-        # 时间步进，网格更新
         if self.grid_m[I] > 1e-6:
+            # 应用重力
             self.grid_dis[I] /= self.grid_m[I]
+            # gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
+            # self.grid_dis[I] += gravity_impulse
+
+            # 处理障碍物碰撞
             grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
             grid_disp = self.grid_dis[I]
             for i in range(self.num_obstacles[None]):
                 predict_pos = grid_disp + grid_pos
-                is_collide, _, normal_in, point_on_surface = self.collide(predict_pos, self.obstacles[i])
+                is_collide, _, normal_in, _ = self.collide(predict_pos, self.obstacles[i])
                 if is_collide:
                     v_proj = grid_disp.dot(normal_in)
                     if v_proj > 0:
@@ -600,6 +623,8 @@ class MpmPBDSolver:
             # TODO: 为了沙子堆积添加了摩擦力，感觉需要把摩擦力移动到其他地方
             boundary_friction = 0.0
             damping = 1.0 - boundary_friction
+
+            # 处理边界
             for d in ti.static(range(self.dim)):
                 if I[d] < self.bound and self.grid_dis[I][d] < 0:
                     self.grid_dis[I][d] = 0
@@ -672,7 +697,7 @@ class MpmPBDSolver:
             self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
 
     @ti.func
-    def update_particles(self, p):
+    def compute_F(self, p):
         if self.material[p] == 0:  # fluid
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
@@ -720,6 +745,10 @@ class MpmPBDSolver:
                 sig_final[d, d] = ti.exp(epsilon_new[d])
             self.F[p] = U @ sig_final @ V.transpose()
 
+    @ti.func
+    def update_position(self, p):
+        self.compute_F(p)
+
         self.x[p] += self.dis[p]
 
         gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
@@ -740,41 +769,8 @@ class MpmPBDSolver:
                 self.x[p][d] = 1
 
     @ti.kernel
-    def solve_iteration(self, i: ti.int32, gap: ti.int32):
-
-        # ===计算活跃包围盒===
-        min_x = 0
-        max_x = self.n_grid
-        min_y = 0
-        max_y = self.n_grid
-        min_z = 0
-        max_z = self.n_grid
-        if self.use_dynamic_grid:
-            min_x, max_x, min_y, max_y, min_z, max_z = self.get_active_bounds()
-        # ==end==
-
-        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
-            self.update_grid(I)
-
-        for p in range(self.n_particles[None]):
-            self.G2P(p)
-            if i == self.iteration - 1:
-                self.update_particles(p)
-                # 更新颜色
-                # val = p / self.n_particles[None]
-                # self.color[p] = ti.Vector([val, 1.0 - val, 0.5 * ti.sin(val * 10)])
-                # 动态网格
-                if self.use_dynamic_grid:
-                    for i in ti.static(range(3)):
-                        self.grid_min[i] = 2147483647
-                        self.grid_max[i] = -2147483648
-                    base_pos = ti.cast(self.x[p] / self.dx + 1e-5, ti.i32)
-                    for i in ti.static(range(3)):
-                        ti.atomic_min(self.grid_min[i], base_pos[i])
-                        ti.atomic_max(self.grid_max[i], base_pos[i])
-            self.solve_constraint(p)
-
-        for I in ti.grouped(ti.ndrange((min_x, max_x), (min_y, max_y), (min_z, max_z))):
+    def mpm_solve(self):
+        for I in ti.grouped(self.grid_m):
             self.grid_dis[I] = ti.zero(self.grid_dis[I])
             self.grid_m[I] = 0.0
             self.grid_vol[I] = 0.0
@@ -783,52 +779,56 @@ class MpmPBDSolver:
         for p in range(self.n_particles[None]):
             self.P2G(p)
 
+        for I in ti.grouped(self.grid_m):
+            self.update_grid(I)
+
         for p in range(self.n_particles[None]):
-            if self.use_morton_code:
-                if i == 0:
-                    self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
-                self.incremental_sort_step(p, i, gap)
+            self.G2P(p)
+
+        for p in range(self.n_particles[None]):
+            self.update_position(p)
 
     def substep(self):
         self.fps_count[None] += 1
+        # if self.fps_count == 1:
         self.lambdas.fill(0)
-        if self.use_morton_code:
-            if self.fps_count[None] == 1:
-                self.sort_init()
-                ti.algorithms.parallel_sort(self.particle_sort_keys, self.particle_sort_indices)
-                self.copy_data()
+        self.D.fill(0)
 
-        for i in range(self.iteration):
-            gap = self.gaps[i]
-            self.solve_iteration(i, gap)
-            # self.compute_average_height()
+        for _ in range(self.iteration):
+            self.solve_constraint()
+            self.D_trace[None] = self.F[0][0, 1]
 
-        if self.use_morton_code:
-            self.copy_data()
-            pass
+        self.mpm_solve()
 
     # endregion
 
     # region === Utils ===
-    @ti.kernel
-    def test(self):
-        average_alpha = 0.0
-        average_D_trace = 0.0
-        average_L = 0.0
-        for p in range(self.n_particles[None]):
-            average_alpha += 1 * (1.0 / self.L[p] - self.D[p].trace() - 1.0)
-            average_D_trace += self.D[p].trace()
-            average_L += 1 + self.D[p].trace()
-        average_alpha /= self.n_particles[None]
-        average_D_trace /= self.n_particles[None]
-        average_L /= self.n_particles[None]
-        print(
-            "=====================",
-            ":",
-            average_alpha,
-            average_D_trace,
-            1.1 * average_L,
-        )
+    # @ti.kernel
+    def debug_probe(self, gui):
+        # 只盯着第 0 号粒子看 (假设它是方块里的一员)
+        p = 0
+
+        # 打印频率控制，别刷屏，每 60 帧打一次，或者当它高度异常低的时候打
+        # 这里为了排查，我们每一帧都打，但你可以配合 time.sleep 来看
+
+        # 1. 检查 F (变形梯度)：它真的记录下"我变扁了"吗？
+        F_ti = self.F[p]
+        # 将 Taichi 矩阵转换为 NumPy 数组，然后计算 SVD
+        F_np = np.array([[F_ti[i, j] for j in range(3)] for i in range(3)])
+        U, sig, Vh = np.linalg.svd(F_np)
+
+        # 2. 检查 D (位移梯度)：当前的修正量是多少？
+        D = self.D[p]
+
+        # 3. 检查位置
+        pos = self.x[p]
+
+        # 打印核心诊断信息
+        gui.text(f"=== Debug P[0] ===")
+        gui.text(f"  Pos Y: {pos.y:.4f}")
+        gui.text(f"  F_yy : {F_ti[1, 1]:.4f} (如果接近0说明压扁了)")
+        gui.text(f"  Sig  : {sig[0]:.3f}, {sig[1]:.3f}, {sig[2]:.3f} (奇异值)")
+        gui.text(f"  D_yy : {D[1, 1]:.4f} (当前帧的形变位移)")
 
     # @ti.kernel
     def generate_lines_vertex(self):

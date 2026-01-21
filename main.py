@@ -155,8 +155,7 @@ def main(args):
         # endregion
 
         # region === Print Information ===
-        gui.text(f"min:({mpm.grid_min[0]},{mpm.grid_min[1]},{mpm.grid_min[2]})")
-        gui.text(f"max:({mpm.grid_max[0]},{mpm.grid_max[1]},{mpm.grid_max[2]})")
+        mpm.debug_probe(gui)
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
