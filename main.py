@@ -100,6 +100,19 @@ def process_key_action(mpm, move_speed, hide_obstacles):
 # endregion
 
 
+def parse_args(mpm, args):
+    use_optimization = args.opt
+    steps = args.steps
+    mpm.iteration = steps
+    if use_optimization:
+        mpm.shrink_factor = 3.1
+        mpm.use_morton_code = True
+        mpm.use_dynamic_grid = False
+    else:
+        mpm.use_morton_code = False
+        mpm.use_dynamic_grid = False
+
+
 def main(args):
     mpm = MpmPBDSolver()
     # mpm.generate_lines_vertex()
@@ -116,14 +129,8 @@ def main(args):
     start_frame = 50
     end_frame = 200
 
-    use_optimization = args.opt
-    if use_optimization:
-        mpm.shrink_factor = 3.1
-        mpm.use_morton_code = True
-        mpm.use_dynamic_grid = False
-    else:
-        mpm.use_morton_code = False
-        mpm.use_dynamic_grid = False
+    parse_args(mpm, args)
+
     setup_scene(mpm)
 
     r_key_pressed = False
@@ -198,5 +205,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--opt", action="store_true")
+    parser.add_argument("--steps", type=int, default=5)
     args = parser.parse_args()
     main(args)

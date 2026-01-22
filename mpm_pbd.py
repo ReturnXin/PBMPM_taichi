@@ -50,7 +50,7 @@ class MpmPBDSolver:
         self.p_mass = self.p_vol * self.p_rho
         self.gravity = 9.8
         self.bound = 10
-        self.iteration = 6
+        self.iteration = 5
         self.average_height = ti.field(dtype=ti.f32, shape=())
         self.fps_count = ti.field(dtype=ti.i32, shape=())
         self.interia_force = ti.Vector.field(self.dim, dtype=ti.f32, shape=())
@@ -534,10 +534,14 @@ class MpmPBDSolver:
                     inv_sig[d, d] = 1.0 / ti.max(sig_old[d, d], 0.1)
                 F_inv = V_old @ inv_sig @ U_old.transpose()
 
-                diff = (tgt @ F_inv - I) - self.D[p]
+                D_target = tgt @ F_inv - I
+                diff = D_target - self.D[p]
+
+                # diff = (tgt @ F_inv - I) - self.D[p]
                 # XPBD
-                stiffness_E = 50000
+                stiffness_E = 100000
                 alpha = 1.0 / (stiffness_E + 1e-6)
+                substep_dt = self.dt / self.iteration
                 tilde_alpha = alpha / (self.dt**2)
                 delta_lambda = (diff - tilde_alpha * self.lambdas[p]) / (1.0 + tilde_alpha)
 
@@ -549,6 +553,7 @@ class MpmPBDSolver:
                     print(f"diff_yy={diff[1,1]:.4f}")
                     print(f"tilde_alpha={tilde_alpha:.4f}")
                     print(f"delta_lambda_yy={delta_lambda[1,1]}")
+                    print(f"D_yy={self.D[0][1,1]}")
 
             elif self.material[p] == 2:  # sand
                 I = ti.Matrix.identity(ti.f32, self.dim)
@@ -709,7 +714,7 @@ class MpmPBDSolver:
             U, sig, V = ti.svd(self.F[p])
             new_sig = ti.Matrix.identity(ti.f32, self.dim)
             for d in range(self.dim):
-                new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 10000))
+                new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 100000))
             self.F[p] = U @ new_sig @ V.transpose()
         elif self.material[p] == 2:
             I = ti.Matrix.identity(ti.f32, self.dim)
@@ -785,20 +790,28 @@ class MpmPBDSolver:
         for p in range(self.n_particles[None]):
             self.G2P(p)
 
+    @ti.kernel
+    def update_particle(self):
         for p in range(self.n_particles[None]):
             self.update_position(p)
+
+    @ti.kernel
+    def damp_lambdas(self, factor: ti.f32):
+        for p in range(self.n_particles[None]):
+            self.lambdas[p] *= factor
 
     def substep(self):
         self.fps_count[None] += 1
         # if self.fps_count == 1:
-        self.lambdas.fill(0)
+        # self.lambdas.fill(0)
+        self.damp_lambdas(0.8)
         self.D.fill(0)
-
+        print("==================")
         for _ in range(self.iteration):
             self.solve_constraint()
             self.D_trace[None] = self.F[0][0, 1]
-
-        self.mpm_solve()
+            self.mpm_solve()
+        self.update_particle()
 
     # endregion
 
