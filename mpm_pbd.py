@@ -105,22 +105,6 @@ class MpmPBDSolver:
         self.num_grid_lines = 3 * (2 * (self.n_grid + 1) + 1)
         self.grid_lines_vertex = ti.Vector.field(self.dim, dtype=ti.float32, shape=self.num_grid_lines * 2)
 
-        # ===Morton Code
-        self.use_morton_code = True
-        self.shrink_factor = 3.8
-        self.gaps = ti.field(dtype=ti.i32, shape=self.iteration)
-        self.particle_sort_keys = ti.field(dtype=ti.i32, shape=self.max_particles)
-        self.particle_sort_indices = ti.field(dtype=ti.i32, shape=self.max_particles)
-        self.temp_x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)
-        self.temp_dis = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.max_particles)
-        self.temp_D = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)
-        self.temp_F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.max_particles)
-        self.temp_L = ti.field(dtype=ti.f32, shape=self.max_particles)
-        self.temp_log_JP = ti.field(dtype=ti.f32, shape=self.max_particles)
-        self.temp_color = ti.Vector.field(3, ti.f32, shape=self.max_particles)
-        self.temp_material = ti.field(dtype=ti.int32, shape=self.max_particles)
-        self.temp_radius = ti.field(dtype=ti.f32, shape=self.max_particles)
-
         # ===Dynamic Bound
         self.use_dynamic_grid = False
         self.grid_min = ti.field(dtype=ti.i32, shape=self.dim)
@@ -307,87 +291,6 @@ class MpmPBDSolver:
 
     # endregion
 
-    # region === Morton Code ===
-
-    @ti.kernel
-    def sort_init(self):
-        for p in range(self.max_particles):
-            if p < self.n_particles[None]:
-                self.particle_sort_keys[p] = get_morton_code(self.x[p], self.dx, self.n_grid)
-            else:
-                self.particle_sort_keys[p] = 2147483647
-            self.particle_sort_indices[p] = p
-
-    @ti.func
-    def copy_particle_to_temp(self, i):
-        old_idx = self.particle_sort_indices[i]
-        self.temp_x[i] = self.x[old_idx]
-        self.temp_dis[i] = self.dis[old_idx]
-        self.temp_D[i] = self.D[old_idx]
-        self.temp_F[i] = self.F[old_idx]
-        self.temp_L[i] = self.L[old_idx]
-        self.temp_log_JP[i] = self.log_JP[old_idx]
-        self.temp_color[i] = self.color[old_idx]
-        self.temp_material[i] = self.material[old_idx]
-        self.temp_radius[i] = self.radius[old_idx]
-
-    @ti.func
-    def copy_temp_to_particle(self, i):
-        self.x[i] = self.temp_x[i]
-        self.dis[i] = self.temp_dis[i]
-        self.D[i] = self.temp_D[i]
-        self.F[i] = self.temp_F[i]
-        self.L[i] = self.temp_L[i]
-        self.log_JP[i] = self.temp_log_JP[i]
-        self.color[i] = self.temp_color[i]
-        self.material[i] = self.temp_material[i]
-        self.radius[i] = self.temp_radius[i]
-        self.particle_sort_indices[i] = i
-
-    @ti.kernel
-    def copy_data(self):
-        for i in range(self.n_particles[None]):
-            self.copy_particle_to_temp(i)
-
-        for i in range(self.n_particles[None]):
-            self.copy_temp_to_particle(i)
-
-    @ti.func
-    def swap_particle_key(self, i, j):
-        self.particle_sort_indices[i], self.particle_sort_indices[j] = (
-            self.particle_sort_indices[j],
-            self.particle_sort_indices[i],
-        )
-        self.particle_sort_keys[i], self.particle_sort_keys[j] = (
-            self.particle_sort_keys[j],
-            self.particle_sort_keys[i],
-        )
-
-    @ti.func
-    def incremental_sort_step(self, p: int, i: int, gap: int):
-        block_idx = p // gap
-        phase = self.fps_count[None] % 2
-        if block_idx % 2 == phase:
-            q = p + gap
-            if q < self.n_particles[None]:
-                key_i = self.particle_sort_keys[p]
-                key_j = self.particle_sort_keys[q]
-                if key_i > key_j:
-                    self.swap_particle_key(p, q)
-
-    def generate_gaps(self):
-        shrink_factor = self.shrink_factor
-        temp_gaps = []
-        current_gap = 1
-        for _ in range(self.iteration):
-            temp_gaps.append(int(current_gap))
-            current_gap = max(current_gap * shrink_factor, current_gap + 1)
-        temp_gaps = temp_gaps[::-1]
-        for i in range(len(temp_gaps)):
-            self.gaps[i] = temp_gaps[i]
-
-    # endregion
-
     # region === init ===
     @ti.kernel
     def add_particles(
@@ -455,9 +358,6 @@ class MpmPBDSolver:
         self.init_material_params()
         if not hide_obstacles:
             self.prepare_render_data()
-        if self.use_morton_code:
-            self.generate_gaps()
-        print(self.gaps)
 
         print(self.n_particles[None])
 
@@ -477,23 +377,6 @@ class MpmPBDSolver:
     # endregion
 
     # region === MPM ===
-    @ti.func
-    def get_active_bounds(self):
-        min_x = 0
-        max_x = self.n_grid
-        min_y = 0
-        max_y = self.n_grid
-        min_z = 0
-        max_z = self.n_grid
-        if self.use_dynamic_grid:
-            padding = 3
-            min_x = ti.max(0, self.grid_min[0] - padding)
-            max_x = ti.min(self.n_grid, self.grid_max[0] + padding)
-            min_y = ti.max(0, self.grid_min[1] - padding)
-            max_y = ti.min(self.n_grid, self.grid_max[1] + padding)
-            min_z = ti.max(0, self.grid_min[2] - padding)
-            max_z = ti.min(self.n_grid, self.grid_max[2] + padding)
-        return min_x, max_x, min_y, max_y, min_z, max_z
 
     @ti.kernel
     def solve_constraint(self):
@@ -595,8 +478,6 @@ class MpmPBDSolver:
         if self.grid_m[I] > 1e-6:
             # 应用重力
             self.grid_dis[I] /= self.grid_m[I]
-            # gravity_impulse = ti.Vector([0.0, -self.gravity, 0.0]) * self.dt * self.dt
-            # self.grid_dis[I] += gravity_impulse
 
             # 处理障碍物碰撞
             grid_pos = ti.Vector([I[0], I[1], I[2]]) * self.dx
@@ -701,6 +582,7 @@ class MpmPBDSolver:
             for d in range(self.dim):
                 new_sig[d, d] = ti.max(0.1, ti.min(sig[d, d], 100000))
             self.F[p] = U @ new_sig @ V.transpose()
+
         elif self.material[p] == 2:
             I = ti.Matrix.identity(ti.f32, self.dim)
             self.F[p] = (I + self.D[p]) @ self.F[p]
@@ -798,20 +680,8 @@ class MpmPBDSolver:
     # endregion
 
     # region === Utils ===
-    # @ti.kernel
     def debug_probe(self, gui):
-
-        p = 0
-        F_ti = self.F[p]
-        F_np = np.array([[F_ti[i, j] for j in range(3)] for i in range(3)])
-        U, sig, Vh = np.linalg.svd(F_np)
-        D = self.D[p]
-        pos = self.x[p]
-        gui.text(f"=== Debug P[0] ===")
-        gui.text(f"  Pos Y: {pos.y:.4f}")
-        gui.text(f"  F_yy : {F_ti[1, 1]:.4f} (如果接近0说明压扁了)")
-        gui.text(f"  Sig  : {sig[0]:.3f}, {sig[1]:.3f}, {sig[2]:.3f} (奇异值)")
-        gui.text(f"  D_yy : {D[1, 1]:.4f} (当前帧的形变位移)")
+        pass
 
     # @ti.kernel
     def generate_lines_vertex(self):
@@ -839,10 +709,6 @@ class MpmPBDSolver:
             self.grid_lines_vertex[2 * idx + 1] = ti.Vector([n, 0, i]) * self.dx
             idx += 1
 
-    @ti.kernel
-    def apply_interia(self, interia_force: ti.types.vector(3, float)):
-        self.interia_force[None] = interia_force
-
     def reset(self):
         self.n_particles[None] = 0
         self.fps_count[None] = 0
@@ -860,6 +726,7 @@ class MpmPBDSolver:
         self.D.fill(0)
         self.L.fill(1.0)  # 密度默认为 1
         self.log_JP.fill(0)
+        self.lambdas.fill(0)
 
         self.reset_F_to_identity()
 
