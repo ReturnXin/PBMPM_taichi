@@ -162,7 +162,7 @@ def main(args):
         # endregion
 
         # region === Print Information ===
-        mpm.debug_probe(gui)
+        # mpm.debug_probe(gui)
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))

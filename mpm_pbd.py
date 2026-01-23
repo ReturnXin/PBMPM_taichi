@@ -8,6 +8,7 @@ MaterialParam = ti.types.struct(
     rho=ti.f32,
     viscosity=ti.f32,
     stiffness=ti.f32,
+    E=ti.f32,
     beta=ti.f32,
     elastic_relaxation=ti.f32,
     friction_angle=ti.f32,
@@ -297,8 +298,7 @@ class MpmPBDSolver:
         self.mat_params[0].stiffness = 0.8
 
         # 1: Elastic
-        self.mat_params[1].beta = 0.5
-        self.mat_params[1].elastic_relaxation = 1.0
+        self.mat_params[1].E = 100000
 
         # 2. Sand
         self.mat_params[2].beta = 1.0
@@ -519,14 +519,7 @@ class MpmPBDSolver:
                 F_star = U @ new_sig @ V.transpose()
                 A_shape = U @ V.transpose()
 
-                det_F = F_star.determinant()
-                det_F_clamped = ti.max(0.1, ti.min(det_F, 1000))
-                A_vol = F_star * 1.0 / ti.pow(det_F_clamped, 1.0 / 3.0)
-
-                # beta = self.mat_params[1].beta
-                beta = 1.0
-                elastic_relaxation = self.mat_params[1].elastic_relaxation
-                tgt = beta * A_shape + (1 - beta) * A_vol
+                tgt = A_shape
 
                 U_old, sig_old, V_old = ti.svd(self.F[p])
                 inv_sig = ti.Matrix.zero(ti.f32, self.dim, self.dim)
@@ -539,21 +532,13 @@ class MpmPBDSolver:
 
                 # diff = (tgt @ F_inv - I) - self.D[p]
                 # XPBD
-                stiffness_E = 100000
+                stiffness_E = self.mat_params[1].E
                 alpha = 1.0 / (stiffness_E + 1e-6)
-                substep_dt = self.dt / self.iteration
                 tilde_alpha = alpha / (self.dt**2)
                 delta_lambda = (diff - tilde_alpha * self.lambdas[p]) / (1.0 + tilde_alpha)
 
                 self.D[p] += delta_lambda
                 self.lambdas[p] += delta_lambda
-
-                if p == 0:
-                    print(f"Target_yy={tgt[1,1]:.4f}, Current_F_yy={self.F[p][1,1]:.4f}")
-                    print(f"diff_yy={diff[1,1]:.4f}")
-                    print(f"tilde_alpha={tilde_alpha:.4f}")
-                    print(f"delta_lambda_yy={delta_lambda[1,1]}")
-                    print(f"D_yy={self.D[0][1,1]}")
 
             elif self.material[p] == 2:  # sand
                 I = ti.Matrix.identity(ti.f32, self.dim)
@@ -802,11 +787,8 @@ class MpmPBDSolver:
 
     def substep(self):
         self.fps_count[None] += 1
-        # if self.fps_count == 1:
-        # self.lambdas.fill(0)
         self.damp_lambdas(0.8)
         self.D.fill(0)
-        print("==================")
         for _ in range(self.iteration):
             self.solve_constraint()
             self.D_trace[None] = self.F[0][0, 1]
@@ -818,25 +800,13 @@ class MpmPBDSolver:
     # region === Utils ===
     # @ti.kernel
     def debug_probe(self, gui):
-        # 只盯着第 0 号粒子看 (假设它是方块里的一员)
+
         p = 0
-
-        # 打印频率控制，别刷屏，每 60 帧打一次，或者当它高度异常低的时候打
-        # 这里为了排查，我们每一帧都打，但你可以配合 time.sleep 来看
-
-        # 1. 检查 F (变形梯度)：它真的记录下"我变扁了"吗？
         F_ti = self.F[p]
-        # 将 Taichi 矩阵转换为 NumPy 数组，然后计算 SVD
         F_np = np.array([[F_ti[i, j] for j in range(3)] for i in range(3)])
         U, sig, Vh = np.linalg.svd(F_np)
-
-        # 2. 检查 D (位移梯度)：当前的修正量是多少？
         D = self.D[p]
-
-        # 3. 检查位置
         pos = self.x[p]
-
-        # 打印核心诊断信息
         gui.text(f"=== Debug P[0] ===")
         gui.text(f"  Pos Y: {pos.y:.4f}")
         gui.text(f"  F_yy : {F_ti[1, 1]:.4f} (如果接近0说明压扁了)")
