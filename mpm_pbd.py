@@ -282,7 +282,7 @@ class MpmPBDSolver:
         self.mat_params[0].stiffness = 0.8
 
         # 1: Elastic
-        self.mat_params[1].E = 100000
+        self.mat_params[1].E = 50000
 
         # 2. Sand
         self.mat_params[2].beta = 1.0
@@ -572,8 +572,8 @@ class MpmPBDSolver:
         if self.material[p] == 0:  # fluid
             # Update Density
             self.L[p] *= self.D[p].trace() + 1
-            self.L[p] = ti.max(self.L[p], 0.05)
-            self.compute_water_color(p, 1)
+            self.L[p] = ti.max(self.L[p], 0.2)
+            self.compute_water_color(p, 0)
 
         elif self.material[p] == 1:  # elastic
             self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.D[p]) @ self.F[p]
@@ -664,13 +664,17 @@ class MpmPBDSolver:
 
     @ti.kernel
     def damp_lambdas(self, factor: ti.f32):
+        self.average_height[None] = 0.0
         for p in range(self.n_particles[None]):
             self.lambdas[p] *= factor
+            # 计算平均高度
+            self.average_height[None] += self.x[p][1]
+        self.average_height[None] /= self.n_particles[None]
 
     def substep(self):
         self.fps_count[None] += 1
-        self.damp_lambdas(0.8)
-        self.D.fill(0)
+        self.damp_lambdas(0.5)
+        # self.D.fill(0)
         for _ in range(self.iteration):
             self.solve_constraint()
             self.D_trace[None] = self.F[0][0, 1]

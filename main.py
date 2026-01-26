@@ -23,33 +23,36 @@ scene = ti.ui.Scene()
 camera = ti.ui.Camera()
 
 
-def setup_scene(mpm):
+def setup_scene(mpm, type):
     mpm.reset()
-    # mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.15, color=[0.6, 0.4, 0.8])
-    # mpm.add_cube(
-    #     particle_num=2**16,
-    #     center=[0.4, 0.5, 0.4],
-    #     cube_size=[0.5, 0.5, 0.5],
-    #     color=[0.1, 0.4, 0.8],
-    #     material=0,
-    #     radius=0.005,
-    # )
-    mpm.add_cube(
-        particle_num=2**16,
-        center=[0.4, 0.5, 0.4],
-        cube_size=[0.3, 0.3, 0.3],
-        color=[0.95, 0.4, 0.4],
-        material=1,
-        radius=0.008,
-    )
-    # mpm.add_cube(
-    #     particle_num=2**13,
-    #     center=[0.4, 0.25, 0.4],
-    #     cube_size=[0.5, 0.5, 0.5],
-    #     color=[0.85, 0.75, 0.55],
-    #     material=2,
-    #     radius=0.006,
-    # )
+    if type == 0:
+        mpm.add_ball_obstacles(center=[0.5, 0.125, 0.5], radius=0.15, color=[0.6, 0.4, 0.8])
+        mpm.add_cube(
+            particle_num=2**16,
+            center=[0.4, 0.5, 0.4],
+            cube_size=[0.5, 0.5, 0.5],
+            color=[0.1, 0.4, 0.8],
+            material=0,
+            radius=0.005,
+        )
+    elif type == 1:
+        mpm.add_cube(
+            particle_num=2**16,
+            center=[0.4, 0.5, 0.4],
+            cube_size=[0.3, 0.3, 0.3],
+            color=[0.95, 0.4, 0.4],
+            material=1,
+            radius=0.008,
+        )
+    elif type == 2:
+        mpm.add_cube(
+            particle_num=2**13,
+            center=[0.4, 0.25, 0.4],
+            cube_size=[0.5, 0.5, 0.5],
+            color=[0.85, 0.75, 0.55],
+            material=2,
+            radius=0.006,
+        )
     mpm.init(hide_obstacles)
     time.sleep(1)
 
@@ -131,7 +134,7 @@ def main(args):
 
     parse_args(mpm, args)
 
-    setup_scene(mpm)
+    setup_scene(mpm, args.material)
 
     r_key_pressed = False
     test_count = 0
@@ -206,5 +209,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--opt", action="store_true")
     parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--material", type=int, default=1)
     args = parser.parse_args()
     main(args)
