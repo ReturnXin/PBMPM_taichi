@@ -1,0 +1,74 @@
+[0 0 0 0 0 0 0 0]
+65536
+>>> Start profiling from frame 50...
+===== Profiling Report =====
+=======================================================================================================
+Kernel Profiler(trace, default) @ CUDA on NVIDIA GeForce RTX 4060 Laptop GPU
+=======================================================================================================
+[  start.time | kernel.time |   regs  |   shared mem | grid size | block size | occupancy ] Kernel name
+-------------------------------------------------------------------------------------------------------
+[    0.000 ms |    0.042 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_6_kernel_0_serial
+[    0.042 ms |    0.003 ms |       8 |      0 bytes |         1 |          1 | 24 blocks ] snode_writer_6_kernel_0_serial
+[    0.046 ms |    0.003 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    0.049 ms |    0.019 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    0.068 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    0.071 ms |    0.107 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    0.179 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    0.190 ms |    0.004 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    0.194 ms |    0.428 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    0.622 ms |    0.003 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    0.625 ms |    0.010 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    0.635 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    0.639 ms |    0.106 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    0.745 ms |    0.012 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    0.757 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    0.760 ms |    0.414 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    1.174 ms |    0.004 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    1.178 ms |    0.010 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    1.188 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    1.191 ms |    0.106 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    1.298 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    1.309 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    1.312 ms |    0.433 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    1.745 ms |    0.004 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    1.749 ms |    0.009 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    1.758 ms |    0.004 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    1.762 ms |    0.107 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    1.869 ms |    0.012 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    1.881 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    1.884 ms |    0.415 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    2.299 ms |    0.003 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    2.302 ms |    0.009 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    2.311 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    2.314 ms |    0.106 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    2.421 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    2.432 ms |    0.004 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    2.436 ms |    0.409 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    2.845 ms |    0.004 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    2.849 ms |    0.010 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    2.859 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    2.862 ms |    0.106 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    2.969 ms |    0.012 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    2.981 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    2.984 ms |    0.414 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    3.397 ms |    0.003 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    3.401 ms |    0.010 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    3.410 ms |    0.004 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    3.414 ms |    0.106 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    3.520 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    3.532 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    3.520 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    3.532 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    3.535 ms |    0.408 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+[    3.942 ms |    0.003 ms |      12 |      0 bytes |         1 |          1 | 24 blocks ] snode_reader_104_kernel_0_serial
+[    3.945 ms |    0.010 ms |      32 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_0_range_for
+[    3.956 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_1_serial
+[    3.959 ms |    0.104 ms |     168 |      0 bytes |      1152 |        128 |  3 blocks ] solve_iteration_c90_0_kernel_2_range_for
+[    4.063 ms |    0.011 ms |      18 |      0 bytes |      1152 |        128 | 12 blocks ] solve_iteration_c90_0_kernel_3_range_for
+[    4.074 ms |    0.003 ms |      10 |      0 bytes |         1 |          1 | 24 blocks ] solve_iteration_c90_0_kernel_4_serial
+[    4.078 ms |    0.409 ms |      72 |      0 bytes |      1152 |        128 |  7 blocks ] solve_iteration_c90_0_kernel_5_range_for
+-------------------------------------------------------------------------------------------------------
+Number of records:  58
+=======================================================================================================
+Total time for 151 frames: 2.7596 s
+Average FPS: 54.72

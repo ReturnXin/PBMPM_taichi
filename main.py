@@ -72,7 +72,7 @@ def process_mouse_action(mpm, shake_strength):
         interia = ti.Vector([0.0, 0.0, 0.0])
         if abs(dx) > 0.001 and abs(dy) > 0.001:
             interia = ti.Vector([dx * shake_strength, 0.0, -dy * shake_strength])
-        mpm.apply_interia(interia)
+        # mpm.apply_interia(interia)
         last_mouse_x = mouse_x
         last_mouse_y = mouse_y
 
@@ -165,7 +165,7 @@ def main(args):
         # endregion
 
         # region === Print Information ===
-        # mpm.debug_probe(gui)
+        mpm.debug_probe(gui)
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
