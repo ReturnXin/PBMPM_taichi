@@ -2,38 +2,9 @@ import taichi as ti
 import numpy as np
 from utils_renderer import get_unit_cube_mesh, get_sphere_mesh
 from morton_code import get_morton_code
+from pbmpm_types import MaterialParam, Obstacle
+from pbmpm_collision import sdf_box, collide as collide_sdf
 from typing import Any
-
-MaterialParam = ti.types.struct(
-    rho=ti.f32,
-    viscosity=ti.f32,
-    stiffness=ti.f32,
-    E=ti.f32,
-    beta=ti.f32,
-    elastic_relaxation=ti.f32,
-    friction_angle=ti.f32,
-    color=ti.types.vector(3, ti.f32),
-)
-
-Obstacle = ti.types.struct(
-    type=ti.types.int32,
-    center=ti.types.vector(3, ti.f32),
-    radius=ti.types.f32,
-    size=ti.types.vector(3, ti.f32),
-    color=ti.types.vector(3, ti.f32),
-    velocity=ti.types.vector(3, ti.f32),
-)
-
-
-@ti.func
-def sdf_box(pos, center, size):
-    p = pos - center
-    half_size = size * 0.5
-    q = ti.abs(p) - half_size
-    return ti.Vector([ti.max(q[0], 0.0), ti.max(q[1], 0.0), ti.max(q[2], 0.0)]).norm() + ti.min(
-        ti.max(q[0], ti.max(q[1], q[2])), 0.0
-    )
-
 
 @ti.data_oriented
 class MpmPBDSolver:
@@ -228,50 +199,9 @@ class MpmPBDSolver:
                 self.mesh_vertices[i] = center + ti.Vector(
                     [local_pos[0] * size[0], local_pos[1] * size[1], local_pos[2] * size[2]]
                 )
-
     @ti.func
     def collide(self, pos, shape):
-        is_collide = False
-        internal_dist = 0.0
-        normal = ti.Vector([0.0, 0.0, 0.0])
-        point_on_surface = pos
-
-        center = shape.center
-
-        if shape.type == 0:
-            offset = pos - center
-            dist = offset.norm()
-            internal_dist = dist - shape.radius
-            is_collide = dist < shape.radius
-            if is_collide:
-                if dist > 1e-6:
-                    normal = offset / dist
-                else:
-                    normal = ti.Vector([0.0, 1.0, 0.0])
-            point_on_surface = center + normal * shape.radius
-
-        elif shape.type == 1:
-            half_size = shape.size / 2
-            local_pos = pos - center
-            q = ti.abs(local_pos) - half_size
-            external_dist = ti.Vector(
-                [ti.max(q[0], 0.0), ti.max(q[1], 0.0), ti.max(q[2], 0.0)]
-            ).norm()  # 找到外部的最近距离
-            internal_dist = ti.min(ti.max(q[0], ti.max(q[1], q[2])), 0.0)  # 找到内部的最近距离
-            dist = external_dist + internal_dist
-            is_collide = dist < 0
-            normal = ti.Vector([0.0, 0.0, 0.0])
-            point_on_surface = pos
-            if is_collide:
-                # 找到由于哪个轴穿透最浅，离表面最近，法线朝外
-                if q[0] > q[1] and q[0] > q[2]:
-                    normal[0] = 1.0 if local_pos[0] > 0 else -1.0
-                elif q[1] > q[2]:
-                    normal[1] = 1.0 if local_pos[1] > 0 else -1.0
-                else:
-                    normal[2] = 1.0 if local_pos[2] > 0 else -1.0
-            point_on_surface = pos - dist * normal
-        return is_collide, -internal_dist, -normal, point_on_surface
+        return collide_sdf(pos, shape)
 
     # endregion
 
