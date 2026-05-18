@@ -4,6 +4,7 @@ import argparse
 import taichi as ti
 
 from mpm_pbd import MpmPBDSolver
+from material_gui import MaterialPanel
 
 ti.init(arch=ti.cuda, kernel_profiler=True)
 
@@ -15,7 +16,7 @@ move_speed = 0.01
 hide_obstacles = True
 # endregion
 
-window = ti.ui.Window("MPM3D", (720, 720), vsync=True)
+window = ti.ui.Window("MPM3D", (1200, 720), vsync=True)
 gui = window.get_gui()
 canvas = window.get_canvas()
 canvas.set_background_color((0.1, 0.1, 0.1))
@@ -136,6 +137,9 @@ def main(args):
 
     setup_scene(mpm, args.material)
 
+    material_panel = MaterialPanel(setup_scene_fn=setup_scene, mpm=mpm, current=args.material)
+
+    last_request_id = 0
     r_key_pressed = False
     test_count = 0
     # mpm.substep()
@@ -165,7 +169,7 @@ def main(args):
         # endregion
 
         # region === Print Information ===
-        mpm.debug_probe(gui)
+        material_panel.draw(gui)
         # endregion
 
         # scene.lines(mpm.grid_lines_vertex, width=1.0, color=(0.3, 0.3, 0.3))
