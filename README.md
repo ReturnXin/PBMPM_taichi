@@ -1,5 +1,7 @@
 # Introduction
 
+按论文三章组织的新实验与合并系统见 [EXPERIMENTS.md](EXPERIMENTS.md)。入口分别为 `experiments.ch03_xpbmpm`、`experiments.ch04_rigid`、`experiments.ch05_morton` 和 `experiments.combined`，共用 `pbmpm/` 数值核心。
+
 使用taichi语言实现的pbmpm流体仿真模拟器
 
 # Install
