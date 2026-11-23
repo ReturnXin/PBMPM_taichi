@@ -54,7 +54,10 @@ def main(name):
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--profile", action="store_true", help="Separate synchronized replay for stage timings")
     parser.add_argument("--gui", action="store_true", help="Display the response replay")
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "results")
+    chapter = {"xpbmpm": "第三章", "rigid": "第四章", "morton": "第五章", "combined": "第五章"}[name]
+    results_root = Path(__file__).resolve().parents[3] / "毕业论文" / "实验结果" / chapter
+    parser.add_argument("--output", type=Path, default=results_root,
+                        help="Output parent; defaults to this chapter's experiment directory")
     args = parser.parse_args()
     import math
     if not math.isfinite(args.duration) or args.duration <= 0 or min(args.warmup, args.repeats, args.sample_every, args.threads) < 1:
